@@ -18,11 +18,12 @@ TaskState { text, context? }
         │           1 Choice  : quelle catégorie d'usage ?   → choice + probabilities + confidence
         │           3 Noul    : touche 4+ systèmes ? difficile à annuler ?
         │                       le soin rédactionnel est-il la vraie difficulté ?  → 0–1 chacun
-        │           (les 4 questions sont évaluées en parallèle dans le même appel)
+        │           2 Noul spéculatifs : opération de masse ? sortie destinée à un client ?
+        │           (les 6 questions sont évaluées en parallèle dans le même appel)
         ▼
    route()    ──▶  table catégorie → palier (haiku/sonnet/opus),
         │           palier remonté d'un cran si un Noul dépasse le seuil,
-        │           ou si la confiance sur la catégorie est trop basse
+        │           ou si la confiance sur la catégorie passe sous le plancher de sa classe
         ▼
 RoutingDecision { tier, model, classification, escalated, reasons }
 ```
@@ -74,10 +75,15 @@ curl -X POST http://localhost:8787/choose \
 
 ## Les choix de conception qui viennent de la doc TypeSafe
 
-- **Une seule requête, quatre questions.** Les questions sont évaluées en parallèle et
-  isolément : ajouter les trois Noul ne change quasiment pas la latence. C'est le pattern
-  « speculative fan-out » — poser une question dont la réponse ne servira peut-être pas coûte
-  presque rien.
+- **Une seule requête, six questions.** Les questions sont évaluées en parallèle et isolément :
+  ajouter des Noul ne change quasiment pas la latence.
+- **Speculative fan-out.** Deux questions ne servent que sur certaines branches :
+  `is_bulk_operation` n'est lue que si la catégorie est `automation`, `is_client_facing` que pour
+  `communication` et `deliverable`. `route()` les ignore ailleurs. C'est le pattern documenté :
+  poser d'avance une question qui ne servira peut-être pas coûte presque rien, alors qu'un second
+  appel coûte un aller-retour. Elles gagnent leur place — un email de relance avec `craft` à 0.64
+  (sous le seuil) mais `is_client_facing` à 0.93 est escaladé alors que le seul signal « craft »
+  ne l'aurait pas fait.
 - **Des questions atomiques.** Plutôt qu'une seule question « quel modèle pour cette tâche ? »
   (qui demanderait un vrai raisonnement), on pose quatre jugements courts et on compose le
   résultat dans le code. Les poids et les seuils vivent dans `routingTable.ts`, donc les ajuster
@@ -87,9 +93,36 @@ curl -X POST http://localhost:8787/choose \
   lookup vs analytics, analytics vs investigation, communication vs deliverable.
 - **Les Noul renvoient une probabilité, pas un booléen.** Le seuil (`DEFAULT_THRESHOLDS.noul`,
   0.7) est donc un curseur de tolérance au risque, pas une constante figée.
-- **La confiance basse fait monter d'un palier.** Si Jev n'est pas sûr de la catégorie
-  (`useCaseConfidence < 0.5`), on ne parie pas sur le modèle le moins cher : une tâche mal
-  reconnue est précisément le cas où sous-servir coûte cher.
+- **La confiance basse fait monter d'un palier, avec un plancher par catégorie.** Un seuil de
+  confiance n'est pas un seul nombre : une classe dont les erreurs coûtent cher doit passer une
+  barre plus haute avant qu'on fasse confiance au modèle le moins cher. D'où un plancher global à
+  0.5, mais 0.75 pour `automation` (qui écrit dans des systèmes), 0.6 pour `investigation` et
+  `deliverable`.
+
+## Ce qui a été volontairement écarté
+
+- **Un score de complexité comme signal de routage.** Le pattern « intent routing » de TypeSafe
+  ajoute un Score de complexité à côté de l'intention, et le use-case map parle d'« estimate
+  difficulty ». Mais le post dont part ce repo dit exactement l'inverse : *« le routage n'est pas
+  un score de difficulté. "Ça a l'air dur, envoie au gros modèle" est une intuition, et elle se
+  trompe assez souvent pour coûter cher dans les deux sens. »* Les deux sources sont en désaccord
+  ici, et j'ai suivi le post : le classificateur reconnaît une catégorie déjà évaluée, il ne juge
+  pas la difficulté dans l'abstrait. Si tu veux tester l'autre voie, un Score de complexité
+  s'ajoute en une question et se lit dans `route()`.
+- **Le composite scoring pondéré.** Le pattern combine plusieurs dimensions en un score unique
+  avec des poids. Il sert à *classer* des éléments entre eux ; ici les trois signaux d'escalade
+  sont indépendamment suffisants (un seul suffit à justifier un meilleur modèle), donc un OU sur
+  des seuils dit la bonne chose et garde un `reasons[]` lisible quand il faut débugger une
+  décision. Un score pondéré deviendrait utile si tu voulais un budget de risque continu plutôt
+  que des paliers.
+- **Le SDK.** Les docs SDK que j'ai sont celles de Python ; ce projet est en TypeScript, donc
+  l'appel passe par l'API HTTP documentée plutôt que par un SDK dont je devrais deviner la
+  signature. Trois choses en ont quand même été reprises parce qu'elles décrivent le service et
+  pas le binding : `TYPESAFE_DEFAULT_MODEL`, `TYPESAFE_BASE_URL`, et un timeout sur l'appel (un
+  routeur est sur le chemin de chaque message : une connexion qui pend ne doit pas bloquer
+  l'appelant). Le `request_id` que le SDK Python expose sur les réponses et les erreurs n'est pas
+  repris : je ne sais pas s'il arrive en en-tête ou dans le corps, et je préfère ne pas deviner —
+  en cas d'erreur le corps complet est propagé, donc il y figure s'il est dans le corps.
 
 ## Comparer Jev et un LLM classique
 

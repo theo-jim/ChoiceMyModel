@@ -44,6 +44,16 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           "Probability from 0 to 1 that the main difficulty is craft (tone, polish, persuasiveness) " +
           "rather than reaching a correct decision.",
       },
+      isBulkOperation: {
+        type: "number",
+        description:
+          "Probability from 0 to 1 that this applies to many records or entities at once rather than a single one.",
+      },
+      isClientFacing: {
+        type: "number",
+        description:
+          "Probability from 0 to 1 that the output will be seen by someone outside the company.",
+      },
     },
     required: [
       "useCase",
@@ -51,6 +61,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       "spansMultipleSystems",
       "hardToReverse",
       "craftIsMainDifficulty",
+      "isBulkOperation",
+      "isClientFacing",
     ],
     additionalProperties: false,
   },
@@ -63,6 +75,8 @@ interface ClaudeClassifierInput {
   spansMultipleSystems: number;
   hardToReverse: number;
   craftIsMainDifficulty: number;
+  isBulkOperation: number;
+  isClientFacing: number;
 }
 
 function renderState(state: TaskState): string {

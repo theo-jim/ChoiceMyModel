@@ -1,4 +1,5 @@
-const API_URL = "https://api.typesafe.ai/v1/systemone";
+const DEFAULT_BASE_URL = "https://api.typesafe.ai";
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 export interface ChoiceAnswer {
   type: "choice";
@@ -32,13 +33,19 @@ export async function systemOne(request: SystemOneRequest): Promise<SystemOneRes
     throw new Error("TYPESAFE_API_KEY is not set");
   }
 
-  const response = await fetch(API_URL, {
+  const baseUrl = process.env.TYPESAFE_BASE_URL ?? DEFAULT_BASE_URL;
+  const timeoutMs = Number(process.env.TYPESAFE_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+
+  // A router sits on the request path of every message, so a stalled connection
+  // must not hang the caller indefinitely.
+  const response = await fetch(`${baseUrl}/v1/systemone`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {

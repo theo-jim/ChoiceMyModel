@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_ROUTING_TABLE, MODEL_IDS, route } from "../src/routingTable.js";
+import { DEFAULT_ROUTING_TABLE, DEFAULT_THRESHOLDS, MODEL_IDS, route } from "../src/routingTable.js";
 import type { Classification } from "../src/types.js";
 
 function classification(overrides: Partial<Classification> = {}): Classification {
@@ -10,6 +10,8 @@ function classification(overrides: Partial<Classification> = {}): Classification
     spansMultipleSystems: 0,
     hardToReverse: 0,
     craftIsMainDifficulty: 0,
+    isBulkOperation: 0,
+    isClientFacing: 0,
     backend: "jev",
     latencyMs: 100,
     ...overrides,
@@ -60,6 +62,50 @@ test("never escalates past opus even with several reasons", () => {
   );
   assert.equal(decision.tier, "opus");
   assert.equal(decision.reasons.length, 3);
+});
+
+test("reads isBulkOperation only on the automation branch", () => {
+  const onBranch = route(classification({ useCase: "automation", isBulkOperation: 0.95 }));
+  assert.deepEqual(onBranch.reasons, ["acts on many records at once"]);
+
+  // Same speculative answer, irrelevant branch: ignored rather than escalating.
+  const offBranch = route(classification({ useCase: "lookup", isBulkOperation: 0.95 }));
+  assert.deepEqual(offBranch.reasons, []);
+  assert.equal(offBranch.tier, "haiku");
+});
+
+test("reads isClientFacing only on the communication and deliverable branches", () => {
+  const communication = route(classification({ useCase: "communication", isClientFacing: 0.9 }));
+  assert.deepEqual(communication.reasons, ["client-facing output"]);
+  assert.equal(communication.tier, "sonnet");
+
+  const deliverable = route(classification({ useCase: "deliverable", isClientFacing: 0.9 }));
+  assert.equal(deliverable.tier, "opus");
+
+  const summarization = route(classification({ useCase: "summarization", isClientFacing: 0.9 }));
+  assert.deepEqual(summarization.reasons, []);
+  assert.equal(summarization.tier, "haiku");
+});
+
+test("applies a stricter confidence floor to automation than to lookup", () => {
+  // 0.7 clears the global 0.5 floor but not automation's own 0.75.
+  const automation = route(classification({ useCase: "automation", useCaseConfidence: 0.7 }));
+  assert.deepEqual(automation.reasons, ["classifier unsure which use case this is"]);
+  assert.equal(automation.tier, "opus");
+
+  const lookup = route(classification({ useCase: "lookup", useCaseConfidence: 0.7 }));
+  assert.deepEqual(lookup.reasons, []);
+  assert.equal(lookup.tier, "haiku");
+});
+
+test("a class with no per-class floor falls back to the global one", () => {
+  assert.equal(DEFAULT_THRESHOLDS.useCaseConfidenceFloors?.summarization, undefined);
+
+  const justAbove = route(classification({ useCase: "summarization", useCaseConfidence: 0.55 }));
+  assert.deepEqual(justAbove.reasons, []);
+
+  const justBelow = route(classification({ useCase: "summarization", useCaseConfidence: 0.45 }));
+  assert.deepEqual(justBelow.reasons, ["classifier unsure which use case this is"]);
 });
 
 test("falls back to sonnet for an unmapped table entry", () => {

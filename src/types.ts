@@ -40,6 +40,10 @@ export interface Classification {
   hardToReverse: number;
   /** Probability that craft, not correctness, is the main difficulty, 0 to 1. */
   craftIsMainDifficulty: number;
+  /** Speculative: only read when the use case is automation. */
+  isBulkOperation: number;
+  /** Speculative: only read when the use case is communication or deliverable. */
+  isClientFacing: number;
   /** Which backend produced this classification. */
   backend: ClassifierBackend;
   /** Wall-clock time of the classify call, in milliseconds. */
@@ -53,8 +57,14 @@ export type Classifier = (state: TaskState) => Promise<Classification>;
 export interface RoutingThresholds {
   /** A Noul probability at or above this counts as a yes. */
   noul: number;
-  /** Below this use-case confidence, the class is not trusted and the tier is bumped. */
+  /** Global floor: below this use-case confidence, the class is not trusted and the tier is bumped. */
   minUseCaseConfidence: number;
+  /**
+   * Per-class floors that override the global one. A confidence threshold is not
+   * one number: a class whose mistakes are expensive should have to clear a
+   * higher bar before the cheap tier is trusted.
+   */
+  useCaseConfidenceFloors?: Partial<Record<UseCase, number>>;
 }
 
 export interface RoutingDecision {

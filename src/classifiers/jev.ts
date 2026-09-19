@@ -79,6 +79,20 @@ const ROUTING_QUESTIONS = {
     instructions:
       "The main difficulty is the craft of the output (tone, polish, persuasiveness) rather than reaching a correct decision.",
   },
+  // Speculative: each of these only matters on some branches, and route() ignores
+  // them elsewhere. Questions run in parallel, so asking them always is close to free.
+  is_bulk_operation: {
+    type: "noul",
+    instructions: "The task applies to many records or entities at once rather than a single one.",
+  },
+  is_client_facing: {
+    type: "noul",
+    instructions: "The output will be seen by someone outside the company, such as a client or a prospect.",
+    criteria: {
+      true: "Goes to an external reader as-is",
+      false: "Stays internal, or is reviewed and rewritten before anyone outside sees it",
+    },
+  },
 };
 
 function toUseCase(choice: string): UseCase {
@@ -86,14 +100,14 @@ function toUseCase(choice: string): UseCase {
 }
 
 function buildState(state: TaskState): unknown {
-  return state.context ? { task: state.text, context: state.context } : state.text;
+  return state.context ? { task: state.text, context: state.context } : { task: state.text };
 }
 
 export async function classifyWithJev(state: TaskState): Promise<Classification> {
   const startedAt = Date.now();
   const response = await systemOne({
     state: buildState(state),
-    model: process.env.TYPESAFE_MODEL ?? DEFAULT_MODEL,
+    model: process.env.TYPESAFE_DEFAULT_MODEL ?? DEFAULT_MODEL,
     questions: ROUTING_QUESTIONS,
   });
   const latencyMs = Date.now() - startedAt;
@@ -107,6 +121,8 @@ export async function classifyWithJev(state: TaskState): Promise<Classification>
     spansMultipleSystems: readNoul(response.answers, "spans_multiple_systems"),
     hardToReverse: readNoul(response.answers, "hard_to_reverse"),
     craftIsMainDifficulty: readNoul(response.answers, "craft_is_main_difficulty"),
+    isBulkOperation: readNoul(response.answers, "is_bulk_operation"),
+    isClientFacing: readNoul(response.answers, "is_client_facing"),
     backend: "jev",
     latencyMs,
   };

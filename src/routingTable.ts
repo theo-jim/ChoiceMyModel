@@ -35,10 +35,19 @@ export const DEFAULT_ROUTING_TABLE: RoutingTable = {
  * Thresholds are where risk tolerance lives. TypeSafe's guidance is to gate
  * different actions at different levels rather than pick one global number, so
  * tune these per deployment once you can plot confidence against accuracy.
+ *
+ * The per-class floors say: misreading a task that writes state is the costly
+ * mistake, so automation has to clear a higher bar than a lookup before the
+ * cheap tier is trusted.
  */
 export const DEFAULT_THRESHOLDS: RoutingThresholds = {
   noul: 0.7,
   minUseCaseConfidence: 0.5,
+  useCaseConfidenceFloors: {
+    automation: 0.75,
+    investigation: 0.6,
+    deliverable: 0.6,
+  },
 };
 
 function escalate(tier: ModelTier): ModelTier {
@@ -58,13 +67,28 @@ export function route(
   table: RoutingTable = DEFAULT_ROUTING_TABLE,
   thresholds: RoutingThresholds = DEFAULT_THRESHOLDS,
 ): RoutingDecision {
-  const baseTier = table[classification.useCase] ?? "sonnet";
+  const { useCase } = classification;
+  const baseTier = table[useCase] ?? "sonnet";
+  const isYes = (noul: number) => noul >= thresholds.noul;
 
   const reasons: string[] = [];
-  if (classification.hardToReverse >= thresholds.noul) reasons.push("hard to reverse if wrong");
-  if (classification.spansMultipleSystems >= thresholds.noul) reasons.push("spans 4+ systems");
-  if (classification.craftIsMainDifficulty >= thresholds.noul) reasons.push("craft is the main difficulty");
-  if (classification.useCaseConfidence < thresholds.minUseCaseConfidence) {
+  if (isYes(classification.hardToReverse)) reasons.push("hard to reverse if wrong");
+  if (isYes(classification.spansMultipleSystems)) reasons.push("spans 4+ systems");
+  if (isYes(classification.craftIsMainDifficulty)) reasons.push("craft is the main difficulty");
+
+  // Speculative answers, read only on the branch each one was asked for.
+  if (useCase === "automation" && isYes(classification.isBulkOperation)) {
+    reasons.push("acts on many records at once");
+  }
+  if (
+    (useCase === "communication" || useCase === "deliverable") &&
+    isYes(classification.isClientFacing)
+  ) {
+    reasons.push("client-facing output");
+  }
+
+  const confidenceFloor = thresholds.useCaseConfidenceFloors?.[useCase] ?? thresholds.minUseCaseConfidence;
+  if (classification.useCaseConfidence < confidenceFloor) {
     reasons.push("classifier unsure which use case this is");
   }
 
