@@ -17,8 +17,6 @@ function percentile(values: number[], p: number): number {
 }
 
 async function main() {
-  const kind = (process.env.HERD_KIND as AgentKind | undefined) ?? "claude";
-
   const metrics = new Map<UseCase, ClassMetrics>();
   const bump = (useCase: UseCase): ClassMetrics => {
     if (!metrics.has(useCase)) metrics.set(useCase, { tp: 0, fp: 0, fn: 0 });
@@ -30,18 +28,22 @@ async function main() {
     expected: UseCase;
     got: UseCase;
     confidence: string;
+    vendor: AgentKind;
+    expectedVendor: AgentKind | "";
     model: string;
     ms: number;
     ok: boolean;
   }[] = [];
   const latencies: number[] = [];
   let correct = 0;
+  let vendorCorrect = 0;
+  let vendorTotal = 0;
 
-  console.log(`Worker kind: ${kind}\n`);
-
+  // No `kind` passed to route(): the eval exercises Jev's own vendor pick
+  // (vendorFit), not an override from HERD_KIND.
   for (const evalCase of EVAL_CASES) {
     const classification = await classifyWithJev({ text: evalCase.text });
-    const decision = route(classification, { kind });
+    const decision = route(classification);
     const ok = classification.useCase === evalCase.expectedUseCase;
 
     if (ok) {
@@ -52,12 +54,19 @@ async function main() {
       bump(classification.useCase).fp++;
     }
 
+    if (evalCase.expectedKind) {
+      vendorTotal++;
+      if (decision.worker.kind === evalCase.expectedKind) vendorCorrect++;
+    }
+
     latencies.push(classification.latencyMs);
     rows.push({
       id: evalCase.id,
       expected: evalCase.expectedUseCase,
       got: classification.useCase,
       confidence: classification.useCaseConfidence.toFixed(2),
+      vendor: decision.worker.kind,
+      expectedVendor: evalCase.expectedKind ?? "",
       model: decision.worker.model,
       ms: classification.latencyMs,
       ok,
@@ -87,6 +96,12 @@ async function main() {
   console.log(`Macro recall:    ${(macroRecall / classCount).toFixed(2)}`);
   console.log(`Latency p50:     ${percentile(latencies, 50)}ms`);
   console.log(`Latency p95:     ${percentile(latencies, 95)}ms`);
+  if (vendorTotal > 0) {
+    console.log(
+      `Vendor accuracy: ${((vendorCorrect / vendorTotal) * 100).toFixed(1)}% ` +
+        `(${vendorCorrect}/${vendorTotal} annotated cases)`,
+    );
+  }
 }
 
 main().catch((err) => {

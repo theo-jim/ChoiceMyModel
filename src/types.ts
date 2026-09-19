@@ -57,6 +57,8 @@ export interface Classification {
   isBulkMechanical: number;
   /** Probability the worker must modify files; drives the codex sandbox flag. */
   needsWriteAccess: number;
+  /** Probability that codex (over claude) is the better-suited vendor for this task. */
+  vendorFit: number;
   backend: "jev";
   latencyMs: number;
 }

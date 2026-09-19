@@ -22,6 +22,7 @@ function fakeDecision(): RoutingDecision {
       craftIsMainDifficulty: 0,
       isBulkMechanical: 0,
       needsWriteAccess: 0.9,
+      vendorFit: 0,
       backend: "jev",
       latencyMs: 1,
     },

@@ -40,6 +40,7 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
           craft_is_main_difficulty: { type: "noul", noul: 0.3 },
           is_bulk_mechanical: { type: "noul", noul: 0.05 },
           needs_write_access: { type: "noul", noul: 0.9 },
+          codex_is_better_fit: { type: "noul", noul: 0.15 },
         },
         model: "jev-latest",
         usage: { input_tokens: 10, output_tokens: 5 },
@@ -58,6 +59,7 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.deepEqual(result.useCaseProbabilities, { debug: 0.82, implement: 0.1, other: 0.08 });
   assert.equal(result.hardToReverse, 0.2);
   assert.equal(result.needsWriteAccess, 0.9);
+  assert.equal(result.vendorFit, 0.15);
   assert.ok(result.latencyMs >= 0);
 
   // The request actually carried the task state and the routing questions.
@@ -67,4 +69,5 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.equal(body.state.context, "repo: payments");
   assert.ok("use_case" in body.questions);
   assert.ok("needs_write_access" in body.questions);
+  assert.ok("codex_is_better_fit" in body.questions);
 });

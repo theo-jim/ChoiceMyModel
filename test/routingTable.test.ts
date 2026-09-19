@@ -12,6 +12,7 @@ function classification(overrides: Partial<Classification> = {}): Classification
     craftIsMainDifficulty: 0,
     isBulkMechanical: 0,
     needsWriteAccess: 0,
+    vendorFit: 0,
     backend: "jev",
     latencyMs: 100,
     ...overrides,
@@ -72,6 +73,26 @@ test("a codex worker that writes nothing gets a read-only sandbox", () => {
     kind: "codex",
   });
   assert.match(decision.worker.args, /--sandbox read-only/);
+});
+
+test("with no explicit kind, a high vendorFit picks codex", () => {
+  const decision = route(classification({ useCase: "chore", vendorFit: 0.9 }));
+  assert.equal(decision.worker.kind, "codex");
+});
+
+test("with no explicit kind, a low vendorFit picks claude", () => {
+  const decision = route(classification({ useCase: "implement", vendorFit: 0.1 }));
+  assert.equal(decision.worker.kind, "claude");
+});
+
+test("vendorFit exactly at the noul threshold picks codex", () => {
+  const decision = route(classification({ useCase: "chore", vendorFit: 0.7 }));
+  assert.equal(decision.worker.kind, "codex");
+});
+
+test("an explicit kind overrides vendorFit even when Jev would have picked the other vendor", () => {
+  const decision = route(classification({ useCase: "chore", vendorFit: 0.95 }), { kind: "claude" });
+  assert.equal(decision.worker.kind, "claude");
 });
 
 test("bulk mechanical work drops a tier", () => {

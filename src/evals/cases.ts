@@ -1,9 +1,11 @@
-import type { UseCase } from "../types.js";
+import type { AgentKind, UseCase } from "../types.js";
 
 export interface EvalCase {
   id: string;
   text: string;
   expectedUseCase: UseCase;
+  /** Omitted where there is no clear-cut expectation for vendor fit yet. */
+  expectedKind?: AgentKind;
 }
 
 /**
@@ -26,6 +28,8 @@ export const EVAL_CASES: EvalCase[] = [
   { id: "test-2", text: "Backfill unit tests for the invoice parser.", expectedUseCase: "test" },
   { id: "docs-1", text: "Document the socket API in docs/socket-api.md.", expectedUseCase: "docs" },
   { id: "docs-2", text: "Update the README install section for the new CLI.", expectedUseCase: "docs" },
-  { id: "chore-1", text: "Bump every dependency to its latest minor version and fix the lockfile.", expectedUseCase: "chore" },
-  { id: "chore-2", text: "Rename the symbol `fetchUser` to `loadUser` across the whole repo.", expectedUseCase: "chore" },
+  { id: "chore-1", text: "Bump every dependency to its latest minor version and fix the lockfile.", expectedUseCase: "chore", expectedKind: "codex" },
+  { id: "chore-2", text: "Rename the symbol `fetchUser` to `loadUser` across the whole repo.", expectedUseCase: "chore", expectedKind: "codex" },
+  { id: "vendor-implement-1", text: "Design and implement the password reset flow, including deciding the email template's structure.", expectedUseCase: "implement", expectedKind: "claude" },
+  { id: "vendor-refactor-1", text: "Replace every occurrence of `req.body.userId` with `req.user.id` across all 40 route handlers, same substitution everywhere.", expectedUseCase: "refactor", expectedKind: "codex" },
 ];

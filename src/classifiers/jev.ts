@@ -83,6 +83,14 @@ const ROUTING_QUESTIONS = {
     true: "Edits, creates or deletes files",
     false: "Reads, analyses or reports only",
   }),
+  codex_is_better_fit: noul(
+    "An agent with configurable reasoning effort and a strict sandbox mode (codex) suits this " +
+      "task better than a general-purpose conversational agent (claude).",
+    {
+      true: "Bulk mechanical work, effort calibratable via Luna/Terra/Sol, a strict sandbox is useful",
+      false: "Design judgment, nuance, conversational context — not just execution",
+    },
+  ),
 };
 
 function buildState(state: TaskState): EntryType {
@@ -116,6 +124,7 @@ export async function classifyWithJev(
     craftIsMainDifficulty: answers.craft_is_main_difficulty.noul,
     isBulkMechanical: answers.is_bulk_mechanical.noul,
     needsWriteAccess: answers.needs_write_access.noul,
+    vendorFit: answers.codex_is_better_fit.noul,
     backend: "jev",
     latencyMs,
   };

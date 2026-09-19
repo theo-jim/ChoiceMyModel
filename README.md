@@ -105,11 +105,15 @@ modèle sort de son jugement.
   nom de question et par option : `answers.use_case.choice` est l'union littérale de mes propres
   classes, donc plus aucun narrowing à la main. Timeout, retries, `baseURL` et modèle par défaut
   viennent du SDK et de ses variables d'environnement.
-- **Une seule requête, six questions**, évaluées en parallèle : les cinq Noul ne coûtent presque
+- **Une seule requête, sept questions**, évaluées en parallèle : les six Noul ne coûtent presque
   rien de plus que le Choice.
 - **Speculative fan-out.** `is_bulk_mechanical` n'est lue que sur `chore` et `refactor`,
   `needs_write_access` sert à choisir le sandbox codex. Poser d'avance une question qui ne servira
   peut-être pas coûte moins cher qu'un second aller-retour.
+- **Le vendeur (claude vs codex) est aussi une décision de Jev, pas une entrée manuelle.**
+  `vendorFit` (le Noul `codex_is_better_fit`) dit si le travail est plutôt mécanique en masse avec
+  un raisonnement calibrable (codex) ou une affaire de jugement/nuance (claude). `--kind` /
+  `HERD_KIND` restent une échappatoire : s'ils sont fournis, ils priment toujours sur `vendorFit`.
 - **Des critères structurés** (`what` / `not_for` / `examples`) sur les options du Choice, pour les
   frontières qui se confondent : debug vs implement, refactor vs chore, review vs lookup.
 - **Les Noul renvoient une probabilité**, donc le seuil (0.7) est un curseur de tolérance au

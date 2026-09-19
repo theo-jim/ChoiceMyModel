@@ -80,6 +80,11 @@ function deescalate(tier: Tier): Tier {
   return TIER_ORDER[Math.max(TIER_ORDER.indexOf(tier) - 1, 0)];
 }
 
+/** Vendor pick when the caller has no opinion: Jev's vendorFit noul against the same yes/no bar as every other risk signal. */
+function pickVendor(classification: Classification, thresholds: RoutingThresholds): AgentKind {
+  return classification.vendorFit >= thresholds.noul ? "codex" : "claude";
+}
+
 /**
  * Renders herd-spawn's -a value. For claude the permission flag has to be
  * re-included because passing -a replaces herd's default entirely.
@@ -123,9 +128,9 @@ export interface RouteOptions {
  * expensive kind of mistake.
  */
 export function route(classification: Classification, options: RouteOptions = {}): RoutingDecision {
-  const kind = options.kind ?? "claude";
   const table = options.table ?? DEFAULT_ROUTING_TABLE;
   const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
+  const kind = options.kind ?? pickVendor(classification, thresholds);
 
   const { useCase } = classification;
   const baseTier = table[useCase] ?? "mid";
