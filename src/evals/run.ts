@@ -1,6 +1,6 @@
-import { getClassifier } from "../classify.js";
+import { classifyWithJev } from "../classifiers/jev.js";
 import { route } from "../routingTable.js";
-import type { AgentKind, ClassifierBackend, UseCase } from "../types.js";
+import type { AgentKind, UseCase } from "../types.js";
 import { EVAL_CASES } from "./cases.js";
 
 interface ClassMetrics {
@@ -17,9 +17,7 @@ function percentile(values: number[], p: number): number {
 }
 
 async function main() {
-  const backend = (process.env.CLASSIFIER as ClassifierBackend | undefined) ?? "jev";
   const kind = (process.env.HERD_KIND as AgentKind | undefined) ?? "claude";
-  const classify = getClassifier(backend);
 
   const metrics = new Map<UseCase, ClassMetrics>();
   const bump = (useCase: UseCase): ClassMetrics => {
@@ -39,10 +37,10 @@ async function main() {
   const latencies: number[] = [];
   let correct = 0;
 
-  console.log(`Backend: ${backend}   Worker kind: ${kind}\n`);
+  console.log(`Worker kind: ${kind}\n`);
 
   for (const evalCase of EVAL_CASES) {
-    const classification = await classify({ text: evalCase.text });
+    const classification = await classifyWithJev({ text: evalCase.text });
     const decision = route(classification, { kind });
     const ok = classification.useCase === evalCase.expectedUseCase;
 
@@ -89,10 +87,6 @@ async function main() {
   console.log(`Macro recall:    ${(macroRecall / classCount).toFixed(2)}`);
   console.log(`Latency p50:     ${percentile(latencies, 50)}ms`);
   console.log(`Latency p95:     ${percentile(latencies, 95)}ms`);
-  console.log(
-    `\nRun the other backend with CLASSIFIER=${backend === "jev" ? "claude" : "jev"} npm run eval ` +
-      "to compare agreement, latency, and cost the way the post does.",
-  );
 }
 
 main().catch((err) => {

@@ -1,5 +1,5 @@
 export { chooseModel, type ChooseModelOptions } from "./chooseModel.js";
-export { classifyWithClaude, classifyWithJev, getClassifier } from "./classify.js";
+export { classifyWithJev } from "./classifiers/jev.js";
 export {
   DEFAULT_ROUTING_TABLE,
   DEFAULT_THRESHOLDS,
@@ -13,8 +13,6 @@ export { typeSafeClient } from "./typesafe.js";
 export type {
   AgentKind,
   Classification,
-  Classifier,
-  ClassifierBackend,
   ReasoningEffort,
   RoutingDecision,
   RoutingTable,

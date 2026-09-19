@@ -140,9 +140,6 @@ modèle sort de son jugement.
   `npm run eval` pour l'ajuster classe par classe.
 - **Rien n'a été testé contre les API réelles** : aucune clé disponible, et `api.typesafe.ai` est
   bloqué par le proxy. Vérifiés (`npm run typecheck` couvre `src` *et* `test`, `npm test`) : le
-  routeur, les deux classifieurs à travers leur SDK contre un `fetch` stubbé — corps de requête
-  inclus —, `getClassifier`, le parseur d'arguments du CLI et le serveur HTTP (codes de statut
+  routeur, le classifieur Jev à travers son SDK contre un `fetch` stubbé — corps de requête
+  inclus —, le parseur d'arguments du CLI et le serveur HTTP (codes de statut
   400 / 413 / 502, plafond de corps, messages d'erreur génériques).
-- **Le comparatif Jev / Claude** reste disponible : `CLASSIFIER=claude npm run eval` fait tourner
-  le même jeu avec Claude Haiku 4.5 comme classificateur. Ses probabilités ne sont pas calibrées,
-  contrairement à celles de Jev — c'est une baseline, pas un signal équivalent.

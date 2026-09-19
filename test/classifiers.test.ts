@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import Anthropic from "@anthropic-ai/sdk";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
-import { classifyWithClaude } from "../src/classifiers/claude.js";
 import { classifyWithJev } from "../src/classifiers/jev.js";
-import { getClassifier } from "../src/classify.js";
 
 /**
  * These exercise the full SDK pipeline (request assembly + response parsing)
@@ -70,106 +67,4 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.equal(body.state.context, "repo: payments");
   assert.ok("use_case" in body.questions);
   assert.ok("needs_write_access" in body.questions);
-});
-
-test("claude classifier reads the classify_task tool call", async () => {
-  let sentUrl = "";
-  let sentBody: unknown;
-  const client = new Anthropic({
-    apiKey: "test-key",
-    fetch: async (input, init) => {
-      sentUrl = String(input);
-      sentBody = init?.body ? JSON.parse(init.body as string) : undefined;
-      return jsonResponse({
-        id: "msg_test",
-        type: "message",
-        role: "assistant",
-        model: "claude-haiku-4-5",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_1",
-            name: "classify_task",
-            input: {
-              useCase: "review",
-              useCaseConfidence: 0.7,
-              spansMultipleSystems: 0.1,
-              hardToReverse: 0.2,
-              craftIsMainDifficulty: 0.4,
-              isBulkMechanical: 0.05,
-              needsWriteAccess: 0.02,
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-        stop_sequence: null,
-        usage: { input_tokens: 12, output_tokens: 30 },
-      });
-    },
-  });
-
-  const result = await classifyWithClaude(
-    { text: "Review the auth diff", context: "repo: auth" },
-    client,
-  );
-
-  assert.equal(result.backend, "claude");
-  assert.equal(result.useCase, "review");
-  assert.equal(result.useCaseConfidence, 0.7);
-  assert.equal(result.needsWriteAccess, 0.02);
-  assert.ok(result.latencyMs >= 0);
-
-  // The request actually carried the model, the classify_task tool, and the state.
-  assert.match(sentUrl, /\/v1\/messages$/);
-  const body = sentBody as {
-    model: string;
-    tools: { name: string }[];
-    tool_choice: { type: string; name: string };
-    messages: { role: string; content: string }[];
-  };
-  assert.equal(body.model, "claude-haiku-4-5");
-  assert.equal(body.tools[0]?.name, "classify_task");
-  assert.deepEqual(body.tool_choice, { type: "tool", name: "classify_task" });
-  assert.match(body.messages[0]?.content ?? "", /Review the auth diff/);
-  assert.match(body.messages[0]?.content ?? "", /repo: auth/);
-});
-
-test("claude classifier throws when no tool call comes back", async () => {
-  const client = new Anthropic({
-    apiKey: "test-key",
-    fetch: async () =>
-      jsonResponse({
-        id: "msg_test",
-        type: "message",
-        role: "assistant",
-        model: "claude-haiku-4-5",
-        content: [{ type: "text", text: "I cannot classify this." }],
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 12, output_tokens: 8 },
-      }),
-  });
-
-  await assert.rejects(
-    classifyWithClaude({ text: "Review the auth diff" }, client),
-    /did not return a tool call/,
-  );
-});
-
-test("getClassifier resolves backends and rejects unknown ones", () => {
-  const previous = process.env.CLASSIFIER;
-  try {
-    delete process.env.CLASSIFIER;
-    assert.equal(getClassifier(), classifyWithJev, "default is jev");
-    assert.equal(getClassifier("claude"), classifyWithClaude, "explicit wins");
-
-    process.env.CLASSIFIER = "claude";
-    assert.equal(getClassifier(), classifyWithClaude, "env selects the backend");
-
-    process.env.CLASSIFIER = "nope";
-    assert.throws(() => getClassifier(), /unknown classifier backend/);
-  } finally {
-    if (previous === undefined) delete process.env.CLASSIFIER;
-    else process.env.CLASSIFIER = previous;
-  }
 });

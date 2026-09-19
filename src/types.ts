@@ -45,7 +45,7 @@ export interface Classification {
   useCase: UseCase;
   /** Confidence in the use-case pick, 0 to 1. Calibrated when it comes from Jev. */
   useCaseConfidence: number;
-  /** Full distribution across use cases. Jev returns one; the Claude backend does not. */
+  /** Full distribution across use cases. */
   useCaseProbabilities?: Record<string, number>;
   /** Probability that the task touches 4+ systems, services or repos, 0 to 1. */
   spansMultipleSystems: number;
@@ -57,13 +57,9 @@ export interface Classification {
   isBulkMechanical: number;
   /** Probability the worker must modify files; drives the codex sandbox flag. */
   needsWriteAccess: number;
-  backend: ClassifierBackend;
+  backend: "jev";
   latencyMs: number;
 }
-
-export type ClassifierBackend = "jev" | "claude";
-
-export type Classifier = (state: TaskState) => Promise<Classification>;
 
 export interface RoutingThresholds {
   /** A Noul probability at or above this counts as a yes. */
