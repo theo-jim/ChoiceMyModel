@@ -119,15 +119,16 @@ modèle sort de son jugement.
 - **Le mécanique en masse descend d'un cran, mais jamais au détriment d'un signal de risque** — « en
   masse » *et* « difficile à annuler » est la combinaison la plus dangereuse, pas une raison
   d'économiser.
+- **Moindre privilège pour les deux vendeurs.** Une tâche que le classifieur juge sans écriture
+  (`needs_write_access` faible) obtient un worker en lecture seule : `--permission-mode plan` pour
+  claude (analyse seule, aucune édition), `--sandbox read-only` pour codex. Une tâche qui écrit
+  garde `acceptEdits` / `workspace-write`.
 
 ## Ce qui a été volontairement écarté
 
 - **Un score de complexité comme signal de routage.** Le pattern « intent routing » de TypeSafe en
   ajoute un, mais le post dont part ce repo dit l'inverse : *« le routage n'est pas un score de
   difficulté »*. Les deux sources sont en désaccord, j'ai suivi le post.
-- **Un mode lecture seule pour les workers claude.** herd ne documente que `--permission-mode
-  acceptEdits` pour claude ; je n'invente pas de flag. Le distinguo lecture/écriture n'est donc
-  appliqué qu'à codex, où `--sandbox read-only` est documenté.
 - **Un démon.** L'appel a lieu une fois par worker spawné, un événement lourd : le démarrage de
   l'interpréteur ne se voit pas à cette fréquence, et herd assume « three files, no daemon ».
   `npm run dev` expose quand même un `POST /choose` si tu préfères un service.
@@ -137,10 +138,11 @@ modèle sort de son jugement.
 - **`DEFAULT_ROUTING_TABLE`** est une heuristique, pas une table dérivée d'évals réelles. Fais
   grossir `src/evals/cases.ts` avec de vraies tâches que tu as données à des workers, puis
   `npm run eval` pour l'ajuster classe par classe.
-- **Rien n'a été testé contre les API réelles** : aucune clé disponible dans l'environnement où ce
-  code a été écrit, et `api.typesafe.ai` y est bloqué par le proxy. Vérifiés : typecheck, build,
-  12 tests du routeur, et le pipeline complet à travers le SDK contre un `fetch` stubbé, sur les
-  deux vendeurs — corps de requête inclus.
+- **Rien n'a été testé contre les API réelles** : aucune clé disponible, et `api.typesafe.ai` est
+  bloqué par le proxy. Vérifiés (`npm run typecheck` couvre `src` *et* `test`, `npm test`) : le
+  routeur, les deux classifieurs à travers leur SDK contre un `fetch` stubbé — corps de requête
+  inclus —, `getClassifier`, le parseur d'arguments du CLI et le serveur HTTP (codes de statut
+  400 / 413 / 502, plafond de corps, messages d'erreur génériques).
 - **Le comparatif Jev / Claude** reste disponible : `CLASSIFIER=claude npm run eval` fait tourner
   le même jeu avec Claude Haiku 4.5 comme classificateur. Ses probabilités ne sont pas calibrées,
   contrairement à celles de Jev — c'est une baseline, pas un signal équivalent.

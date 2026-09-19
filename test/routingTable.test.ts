@@ -40,10 +40,19 @@ test("a noul below the threshold does not escalate", () => {
 });
 
 test("renders claude args with the permission flag re-included", () => {
-  const decision = route(classification({ useCase: "implement" }), { kind: "claude" });
+  const decision = route(classification({ useCase: "implement", needsWriteAccess: 0.95 }), {
+    kind: "claude",
+  });
   assert.equal(decision.worker.kind, "claude");
   assert.equal(decision.worker.args, "--model claude-sonnet-5 --permission-mode acceptEdits");
   assert.equal(decision.worker.effort, undefined);
+});
+
+test("a claude worker that writes nothing gets plan (read-only) mode", () => {
+  const decision = route(classification({ useCase: "review", needsWriteAccess: 0.05 }), {
+    kind: "claude",
+  });
+  assert.equal(decision.worker.args, "--model claude-sonnet-5 --permission-mode plan");
 });
 
 test("renders codex args with model, reasoning effort and a write sandbox", () => {
@@ -95,6 +104,24 @@ test("applies a stricter confidence floor to implement than to lookup", () => {
   const lookup = route(classification({ useCase: "lookup", useCaseConfidence: 0.65 }));
   assert.deepEqual(lookup.reasons, []);
   assert.equal(lookup.tier, "light");
+});
+
+test("holds the implement confidence floor exactly at 0.75", () => {
+  // The floor check is strict (< floor), so 0.75 itself clears the bar.
+  const floor = DEFAULT_THRESHOLDS.useCaseConfidenceFloors?.implement;
+  assert.equal(floor, 0.75);
+
+  const below = route(classification({ useCase: "implement", useCaseConfidence: 0.74 }));
+  assert.deepEqual(below.reasons, ["classifier unsure which task class this is"]);
+  assert.equal(below.tier, "frontier");
+
+  const atFloor = route(classification({ useCase: "implement", useCaseConfidence: 0.75 }));
+  assert.deepEqual(atFloor.reasons, []);
+  assert.equal(atFloor.tier, "mid");
+
+  const above = route(classification({ useCase: "implement", useCaseConfidence: 0.76 }));
+  assert.deepEqual(above.reasons, []);
+  assert.equal(above.tier, "mid");
 });
 
 test("a class with no per-class floor falls back to the global one", () => {

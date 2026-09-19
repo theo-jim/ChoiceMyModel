@@ -1,4 +1,4 @@
-import { choice, noul, type EntryType } from "@typesafe-ai/sdk";
+import { choice, noul, type EntryType, type TypeSafeClient } from "@typesafe-ai/sdk";
 import { typeSafeClient } from "../typesafe.js";
 import type { Classification, TaskState } from "../types.js";
 
@@ -92,10 +92,16 @@ function buildState(state: TaskState): EntryType {
 /**
  * The Jev step: one cheap, fast forward pass that answers a fixed set of typed
  * questions about a task. It never writes prose — it only decides.
+ *
+ * The client is injectable so the full SDK pipeline can be exercised against a
+ * stubbed transport in tests; production calls the lazy shared client.
  */
-export async function classifyWithJev(state: TaskState): Promise<Classification> {
+export async function classifyWithJev(
+  state: TaskState,
+  client: TypeSafeClient = typeSafeClient(),
+): Promise<Classification> {
   const startedAt = Date.now();
-  const { answers } = await typeSafeClient().systemOne({
+  const { answers } = await client.systemOne({
     state: buildState(state),
     questions: ROUTING_QUESTIONS,
   });

@@ -93,10 +93,16 @@ function renderState(state: TaskState): string {
  * Comparison backend. Claude reports these numbers about itself; unlike Jev's,
  * they are not calibrated against outcomes, so treat them as a baseline to
  * measure Jev against rather than an equivalent signal.
+ *
+ * The client is injectable so the tool-call round trip can be exercised against
+ * a stubbed transport in tests; production calls the lazy shared client.
  */
-export async function classifyWithClaude(state: TaskState): Promise<Classification> {
+export async function classifyWithClaude(
+  state: TaskState,
+  client: Anthropic = anthropic(),
+): Promise<Classification> {
   const startedAt = Date.now();
-  const response = await anthropic().messages.create({
+  const response = await client.messages.create({
     model: CLASSIFIER_MODEL,
     max_tokens: 256,
     system: SYSTEM_PROMPT,

@@ -65,7 +65,7 @@ export const DEFAULT_THRESHOLDS: RoutingThresholds = {
   noul: 0.7,
   minUseCaseConfidence: 0.5,
   useCaseConfidenceFloors: {
-    implement: 0.7,
+    implement: 0.75,
     debug: 0.6,
     refactor: 0.6,
   },
@@ -83,15 +83,20 @@ function deescalate(tier: Tier): Tier {
 /**
  * Renders herd-spawn's -a value. For claude the permission flag has to be
  * re-included because passing -a replaces herd's default entirely.
+ *
+ * Least privilege applies to both vendors: a task the classifier says needs no
+ * writes gets a read-only worker. For claude that is herd's `plan` permission
+ * mode (analyse only, no edits); for codex it is the `read-only` sandbox.
  */
 export function renderWorker(kind: AgentKind, tier: Tier, needsWrite: boolean): WorkerChoice {
   const entry = ROSTERS[kind][tier];
 
   if (kind === "claude") {
+    const permissionMode = needsWrite ? "acceptEdits" : "plan";
     return {
       kind,
       model: entry.model,
-      args: `--model ${entry.model} --permission-mode acceptEdits`,
+      args: `--model ${entry.model} --permission-mode ${permissionMode}`,
     };
   }
 
