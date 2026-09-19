@@ -1,8 +1,6 @@
-import type { Classification, TaskState, UseCase } from "../types.js";
-import { USE_CASES } from "../types.js";
-import { readChoice, readNoul, systemOne } from "../typesafe.js";
-
-const DEFAULT_MODEL = "jev-latest";
+import { choice, noul, type EntryType } from "@typesafe-ai/sdk";
+import { typeSafeClient } from "../typesafe.js";
+import type { Classification, TaskState } from "../types.js";
 
 /**
  * One request, six questions. TypeSafe evaluates them in parallel against the
@@ -13,13 +11,12 @@ const DEFAULT_MODEL = "jev-latest";
  * refactor vs chore, review vs lookup.
  */
 const ROUTING_QUESTIONS = {
-  use_case: {
-    type: "choice",
-    instructions: {
+  use_case: choice(
+    {
       question: "What kind of coding work does this task ask a worker agent to do?",
       focus: "Classify the primary work requested, not every topic mentioned.",
     },
-    criteria: {
+    {
       lookup: {
         what: "Answer a question about the codebase without changing it",
         not_for: "Judging the quality of a change, or finding the cause of a failure",
@@ -43,7 +40,10 @@ const ROUTING_QUESTIONS = {
       refactor: {
         what: "Restructure existing code without changing what it does",
         not_for: "Adding behaviour, or fixing a bug",
-        examples: ["Extract the billing logic into its own module", "Replace the callback chain with async/await"],
+        examples: [
+          "Extract the billing logic into its own module",
+          "Replace the callback chain with async/await",
+        ],
       },
       test: {
         what: "Write or repair tests",
@@ -65,43 +65,27 @@ const ROUTING_QUESTIONS = {
         not_for: "Anything that clearly matches another option",
       },
     },
-  },
-  spans_multiple_systems: {
-    type: "noul",
-    instructions: "Completing this task requires touching four or more distinct systems, services or repositories.",
-  },
-  hard_to_reverse: {
-    type: "noul",
-    instructions: "If the worker gets this wrong, the consequences are costly or hard to undo.",
-    criteria: {
-      true: "Touches migrations, production data, deletions, published releases or shared infrastructure",
-      false: "Confined to a working copy and trivially corrected by trying again",
-    },
-  },
-  craft_is_main_difficulty: {
-    type: "noul",
-    instructions:
-      "The main difficulty is design judgment — naming, structure, a public interface others depend on — rather than mechanical edits.",
-  },
-  is_bulk_mechanical: {
-    type: "noul",
-    instructions: "The task is a repetitive edit applied across many files, with a known and uniform shape.",
-  },
-  needs_write_access: {
-    type: "noul",
-    instructions: "The worker must modify files to do this task.",
-    criteria: {
-      true: "Edits, creates or deletes files",
-      false: "Reads, analyses or reports only",
-    },
-  },
+  ),
+  spans_multiple_systems: noul(
+    "Completing this task requires touching four or more distinct systems, services or repositories.",
+  ),
+  hard_to_reverse: noul("If the worker gets this wrong, the consequences are costly or hard to undo.", {
+    true: "Touches migrations, production data, deletions, published releases or shared infrastructure",
+    false: "Confined to a working copy and trivially corrected by trying again",
+  }),
+  craft_is_main_difficulty: noul(
+    "The main difficulty is design judgment — naming, structure, a public interface others depend on — rather than mechanical edits.",
+  ),
+  is_bulk_mechanical: noul(
+    "The task is a repetitive edit applied across many files, with a known and uniform shape.",
+  ),
+  needs_write_access: noul("The worker must modify files to do this task.", {
+    true: "Edits, creates or deletes files",
+    false: "Reads, analyses or reports only",
+  }),
 };
 
-function toUseCase(choice: string): UseCase {
-  return (USE_CASES as string[]).includes(choice) ? (choice as UseCase) : "other";
-}
-
-function buildState(state: TaskState): unknown {
+function buildState(state: TaskState): EntryType {
   return state.context ? { task: state.text, context: state.context } : { task: state.text };
 }
 
@@ -111,24 +95,21 @@ function buildState(state: TaskState): unknown {
  */
 export async function classifyWithJev(state: TaskState): Promise<Classification> {
   const startedAt = Date.now();
-  const response = await systemOne({
+  const { answers } = await typeSafeClient().systemOne({
     state: buildState(state),
-    model: process.env.TYPESAFE_DEFAULT_MODEL ?? DEFAULT_MODEL,
     questions: ROUTING_QUESTIONS,
   });
   const latencyMs = Date.now() - startedAt;
 
-  const useCase = readChoice(response.answers, "use_case");
-
   return {
-    useCase: toUseCase(useCase.choice),
-    useCaseConfidence: useCase.confidence,
-    useCaseProbabilities: useCase.probabilities,
-    spansMultipleSystems: readNoul(response.answers, "spans_multiple_systems"),
-    hardToReverse: readNoul(response.answers, "hard_to_reverse"),
-    craftIsMainDifficulty: readNoul(response.answers, "craft_is_main_difficulty"),
-    isBulkMechanical: readNoul(response.answers, "is_bulk_mechanical"),
-    needsWriteAccess: readNoul(response.answers, "needs_write_access"),
+    useCase: answers.use_case.choice,
+    useCaseConfidence: answers.use_case.confidence,
+    useCaseProbabilities: answers.use_case.probabilities,
+    spansMultipleSystems: answers.spans_multiple_systems.noul,
+    hardToReverse: answers.hard_to_reverse.noul,
+    craftIsMainDifficulty: answers.craft_is_main_difficulty.noul,
+    isBulkMechanical: answers.is_bulk_mechanical.noul,
+    needsWriteAccess: answers.needs_write_access.noul,
     backend: "jev",
     latencyMs,
   };

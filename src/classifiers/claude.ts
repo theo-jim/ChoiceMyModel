@@ -2,7 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Classification, TaskState, UseCase } from "../types.js";
 import { USE_CASES } from "../types.js";
 
-const client = new Anthropic();
+let client: Anthropic | undefined;
+
+/** Lazy for the same reason as the TypeSafe client: the Jev path needs no Anthropic key. */
+function anthropic(): Anthropic {
+  client ??= new Anthropic();
+  return client;
+}
 
 const CLASSIFIER_MODEL = "claude-haiku-4-5";
 
@@ -90,7 +96,7 @@ function renderState(state: TaskState): string {
  */
 export async function classifyWithClaude(state: TaskState): Promise<Classification> {
   const startedAt = Date.now();
-  const response = await client.messages.create({
+  const response = await anthropic().messages.create({
     model: CLASSIFIER_MODEL,
     max_tokens: 256,
     system: SYSTEM_PROMPT,

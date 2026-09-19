@@ -101,6 +101,10 @@ modèle sort de son jugement.
 
 ## Les choix de conception qui viennent de la doc TypeSafe
 
+- **Le SDK officiel `@typesafe-ai/sdk`**, pas un client HTTP maison. Les réponses sont typées par
+  nom de question et par option : `answers.use_case.choice` est l'union littérale de mes propres
+  classes, donc plus aucun narrowing à la main. Timeout, retries, `baseURL` et modèle par défaut
+  viennent du SDK et de ses variables d'environnement.
 - **Une seule requête, six questions**, évaluées en parallèle : les cinq Noul ne coûtent presque
   rien de plus que le Choice.
 - **Speculative fan-out.** `is_bulk_mechanical` n'est lue que sur `chore` et `refactor`,
@@ -135,7 +139,8 @@ modèle sort de son jugement.
   `npm run eval` pour l'ajuster classe par classe.
 - **Rien n'a été testé contre les API réelles** : aucune clé disponible dans l'environnement où ce
   code a été écrit, et `api.typesafe.ai` y est bloqué par le proxy. Vérifiés : typecheck, build,
-  12 tests du routeur, et le pipeline complet contre un `fetch` stubbé sur les deux vendeurs.
+  12 tests du routeur, et le pipeline complet à travers le SDK contre un `fetch` stubbé, sur les
+  deux vendeurs — corps de requête inclus.
 - **Le comparatif Jev / Claude** reste disponible : `CLASSIFIER=claude npm run eval` fait tourner
   le même jeu avec Claude Haiku 4.5 comme classificateur. Ses probabilités ne sont pas calibrées,
   contrairement à celles de Jev — c'est une baseline, pas un signal équivalent.

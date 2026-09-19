@@ -37,6 +37,8 @@ for (let i = 0; i < argv.length; i++) {
 
 const text = words.join(" ").trim();
 if (!text) usage();
+
+kind ??= process.env.HERD_KIND as AgentKind | undefined;
 if (kind !== undefined && kind !== "claude" && kind !== "codex") usage();
 
 const decision = await chooseModel({ text, context }, { kind });

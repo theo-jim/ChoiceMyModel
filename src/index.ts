@@ -9,7 +9,7 @@ export {
   route,
   type RouteOptions,
 } from "./routingTable.js";
-export { systemOne } from "./typesafe.js";
+export { typeSafeClient } from "./typesafe.js";
 export type {
   AgentKind,
   Classification,
