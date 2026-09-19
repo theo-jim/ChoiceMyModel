@@ -3,19 +3,24 @@ export { classifyWithClaude, classifyWithJev, getClassifier } from "./classify.j
 export {
   DEFAULT_ROUTING_TABLE,
   DEFAULT_THRESHOLDS,
-  MODEL_IDS,
+  ROSTERS,
   loadRoutingTable,
+  renderWorker,
   route,
+  type RouteOptions,
 } from "./routingTable.js";
 export { systemOne } from "./typesafe.js";
 export type {
+  AgentKind,
   Classification,
   Classifier,
   ClassifierBackend,
-  ModelTier,
+  ReasoningEffort,
   RoutingDecision,
   RoutingTable,
   RoutingThresholds,
   TaskState,
+  Tier,
   UseCase,
+  WorkerChoice,
 } from "./types.js";

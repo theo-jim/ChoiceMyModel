@@ -6,14 +6,14 @@ const client = new Anthropic();
 
 const CLASSIFIER_MODEL = "claude-haiku-4-5";
 
-const SYSTEM_PROMPT = `You are a routing classifier, not an assistant. You never answer the task
-itself — you only decide what KIND of task it is, in one pass, so a router can pick which model
-handles it. Answer every field of the tool call. Do not hedge: pick the single best useCase even
-when a task could arguably fit more than one.`;
+const SYSTEM_PROMPT = `You are a routing classifier, not an assistant. You never do the task
+itself — you only decide what KIND of coding task it is, in one pass, so a router can pick which
+agent and model handles it. Answer every field of the tool call. Do not hedge: pick the single
+best useCase even when a task could arguably fit more than one.`;
 
 const CLASSIFY_TOOL: Anthropic.Tool = {
   name: "classify_task",
-  description: "Classify an incoming task along the dimensions used to pick a model tier for it.",
+  description: "Classify a coding task along the dimensions used to pick an agent and model for it.",
   input_schema: {
     type: "object",
     properties: {
@@ -21,10 +21,10 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
         type: "string",
         enum: USE_CASES,
         description:
-          "lookup: retrieve a known fact. analytics: compare/compute over data. " +
-          "investigation: find the cause of something unknown. summarization: condense existing content. " +
-          "communication: a message to a person. deliverable: a finished standalone artifact. " +
-          "automation: an action that changes state in a system.",
+          "lookup: answer a question about the codebase without changing it. review: judge an " +
+          "existing change. debug: find and fix the cause of a failure. implement: build new " +
+          "behaviour. refactor: restructure without changing behaviour. test: write or repair " +
+          "tests. docs: documentation. chore: mechanical or bulk work.",
       },
       useCaseConfidence: {
         type: "number",
@@ -32,27 +32,27 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       },
       spansMultipleSystems: {
         type: "number",
-        description: "Probability from 0 to 1 that this touches four or more distinct systems or data sources.",
+        description:
+          "Probability from 0 to 1 that this requires touching four or more distinct systems, services or repositories.",
       },
       hardToReverse: {
         type: "number",
-        description: "Probability from 0 to 1 that a wrong answer or action is costly or hard to undo.",
+        description: "Probability from 0 to 1 that getting this wrong is costly or hard to undo.",
       },
       craftIsMainDifficulty: {
         type: "number",
         description:
-          "Probability from 0 to 1 that the main difficulty is craft (tone, polish, persuasiveness) " +
-          "rather than reaching a correct decision.",
+          "Probability from 0 to 1 that the main difficulty is design judgment (naming, structure, " +
+          "a public interface) rather than mechanical edits.",
       },
-      isBulkOperation: {
+      isBulkMechanical: {
         type: "number",
         description:
-          "Probability from 0 to 1 that this applies to many records or entities at once rather than a single one.",
+          "Probability from 0 to 1 that this is a repetitive edit across many files with a uniform shape.",
       },
-      isClientFacing: {
+      needsWriteAccess: {
         type: "number",
-        description:
-          "Probability from 0 to 1 that the output will be seen by someone outside the company.",
+        description: "Probability from 0 to 1 that the worker must modify files to do this task.",
       },
     },
     required: [
@@ -61,8 +61,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       "spansMultipleSystems",
       "hardToReverse",
       "craftIsMainDifficulty",
-      "isBulkOperation",
-      "isClientFacing",
+      "isBulkMechanical",
+      "needsWriteAccess",
     ],
     additionalProperties: false,
   },
@@ -75,8 +75,8 @@ interface ClaudeClassifierInput {
   spansMultipleSystems: number;
   hardToReverse: number;
   craftIsMainDifficulty: number;
-  isBulkOperation: number;
-  isClientFacing: number;
+  isBulkMechanical: number;
+  needsWriteAccess: number;
 }
 
 function renderState(state: TaskState): string {

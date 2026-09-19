@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { chooseModel } from "./chooseModel.js";
-import type { TaskState } from "./types.js";
+import type { AgentKind, TaskState } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -23,13 +23,16 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/choose") {
     try {
       const raw = await readBody(req);
-      const state = JSON.parse(raw) as TaskState;
-      if (!state.text) {
+      const body = JSON.parse(raw) as TaskState & { kind?: AgentKind };
+      if (!body.text) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "\"text\" is required" }));
         return;
       }
-      const decision = await chooseModel(state);
+      const decision = await chooseModel(
+        { text: body.text, context: body.context },
+        { kind: body.kind },
+      );
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(decision));
     } catch (err) {

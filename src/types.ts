@@ -1,30 +1,43 @@
+/**
+ * Task classes for coding-agent work, since herd spawns coding agents.
+ * These are the classes the routing table pins to a tier.
+ */
 export type UseCase =
   | "lookup"
-  | "analytics"
-  | "investigation"
-  | "summarization"
-  | "communication"
-  | "deliverable"
-  | "automation"
+  | "review"
+  | "debug"
+  | "implement"
+  | "refactor"
+  | "test"
+  | "docs"
+  | "chore"
   | "other";
 
 export const USE_CASES: UseCase[] = [
   "lookup",
-  "analytics",
-  "investigation",
-  "summarization",
-  "communication",
-  "deliverable",
-  "automation",
+  "review",
+  "debug",
+  "implement",
+  "refactor",
+  "test",
+  "docs",
+  "chore",
   "other",
 ];
 
-export type ModelTier = "haiku" | "sonnet" | "opus";
+/** herd-spawn -k */
+export type AgentKind = "claude" | "codex";
+
+/** Vendor-independent capability tier. The routing table speaks in these. */
+export type Tier = "light" | "mid" | "frontier";
+
+/** codex -c model_reasoning_effort. Claude Code has no equivalent flag. */
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface TaskState {
-  /** The incoming message or task text herd/herdr wants routed to a model. */
+  /** The task text that will be handed to the worker. */
   text: string;
-  /** Optional extra context: thread history, calling agent name, tool count, etc. */
+  /** Optional extra context: repo, calling agent, prior report. */
   context?: string;
 }
 
@@ -34,19 +47,17 @@ export interface Classification {
   useCaseConfidence: number;
   /** Full distribution across use cases. Jev returns one; the Claude backend does not. */
   useCaseProbabilities?: Record<string, number>;
-  /** Probability that the task touches 4+ systems, 0 to 1. */
+  /** Probability that the task touches 4+ systems, services or repos, 0 to 1. */
   spansMultipleSystems: number;
   /** Probability that a wrong answer is costly or hard to undo, 0 to 1. */
   hardToReverse: number;
-  /** Probability that craft, not correctness, is the main difficulty, 0 to 1. */
+  /** Probability that design judgment, not mechanical edits, is the main difficulty, 0 to 1. */
   craftIsMainDifficulty: number;
-  /** Speculative: only read when the use case is automation. */
-  isBulkOperation: number;
-  /** Speculative: only read when the use case is communication or deliverable. */
-  isClientFacing: number;
-  /** Which backend produced this classification. */
+  /** Speculative: read on the chore and refactor branches. */
+  isBulkMechanical: number;
+  /** Probability the worker must modify files; drives the codex sandbox flag. */
+  needsWriteAccess: number;
   backend: ClassifierBackend;
-  /** Wall-clock time of the classify call, in milliseconds. */
   latencyMs: number;
 }
 
@@ -59,20 +70,24 @@ export interface RoutingThresholds {
   noul: number;
   /** Global floor: below this use-case confidence, the class is not trusted and the tier is bumped. */
   minUseCaseConfidence: number;
-  /**
-   * Per-class floors that override the global one. A confidence threshold is not
-   * one number: a class whose mistakes are expensive should have to clear a
-   * higher bar before the cheap tier is trusted.
-   */
+  /** Per-class floors that override the global one, for classes whose mistakes are expensive. */
   useCaseConfidenceFloors?: Partial<Record<UseCase, number>>;
 }
 
-export interface RoutingDecision {
-  tier: ModelTier;
+export interface WorkerChoice {
+  kind: AgentKind;
   model: string;
+  effort?: ReasoningEffort;
+  /** Rendered value for herd-spawn -a */
+  args: string;
+}
+
+export interface RoutingDecision {
+  tier: Tier;
+  worker: WorkerChoice;
   classification: Classification;
   escalated: boolean;
   reasons: string[];
 }
 
-export type RoutingTable = Record<UseCase, ModelTier>;
+export type RoutingTable = Record<UseCase, Tier>;

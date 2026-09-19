@@ -1,6 +1,6 @@
 import { getClassifier } from "../classify.js";
-import { DEFAULT_ROUTING_TABLE, DEFAULT_THRESHOLDS, route } from "../routingTable.js";
-import type { ClassifierBackend, UseCase } from "../types.js";
+import { route } from "../routingTable.js";
+import type { AgentKind, ClassifierBackend, UseCase } from "../types.js";
 import { EVAL_CASES } from "./cases.js";
 
 interface ClassMetrics {
@@ -18,6 +18,7 @@ function percentile(values: number[], p: number): number {
 
 async function main() {
   const backend = (process.env.CLASSIFIER as ClassifierBackend | undefined) ?? "jev";
+  const kind = (process.env.HERD_KIND as AgentKind | undefined) ?? "claude";
   const classify = getClassifier(backend);
 
   const metrics = new Map<UseCase, ClassMetrics>();
@@ -31,18 +32,18 @@ async function main() {
     expected: UseCase;
     got: UseCase;
     confidence: string;
-    tier: string;
+    model: string;
     ms: number;
     ok: boolean;
   }[] = [];
   const latencies: number[] = [];
   let correct = 0;
 
-  console.log(`Backend: ${backend}\n`);
+  console.log(`Backend: ${backend}   Worker kind: ${kind}\n`);
 
   for (const evalCase of EVAL_CASES) {
     const classification = await classify({ text: evalCase.text });
-    const decision = route(classification, DEFAULT_ROUTING_TABLE, DEFAULT_THRESHOLDS);
+    const decision = route(classification, { kind });
     const ok = classification.useCase === evalCase.expectedUseCase;
 
     if (ok) {
@@ -59,7 +60,7 @@ async function main() {
       expected: evalCase.expectedUseCase,
       got: classification.useCase,
       confidence: classification.useCaseConfidence.toFixed(2),
-      tier: decision.tier,
+      model: decision.worker.model,
       ms: classification.latencyMs,
       ok,
     });

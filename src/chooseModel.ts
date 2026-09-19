@@ -1,32 +1,21 @@
 import { getClassifier } from "./classify.js";
-import { DEFAULT_ROUTING_TABLE, DEFAULT_THRESHOLDS, route } from "./routingTable.js";
-import type {
-  ClassifierBackend,
-  RoutingDecision,
-  RoutingTable,
-  RoutingThresholds,
-  TaskState,
-} from "./types.js";
+import { type RouteOptions, route } from "./routingTable.js";
+import type { ClassifierBackend, RoutingDecision, TaskState } from "./types.js";
 
-export interface ChooseModelOptions {
+export interface ChooseModelOptions extends RouteOptions {
   backend?: ClassifierBackend;
-  table?: RoutingTable;
-  thresholds?: RoutingThresholds;
 }
 
 /**
- * Public entry point: classify the task, then route it. This is the function
- * herd/herdr should call before dispatching a message to a model.
+ * Public entry point: classify the task, then pick the worker. This is what
+ * herd's head agent calls before herd-spawn.
  */
 export async function chooseModel(
   state: TaskState,
   options: ChooseModelOptions = {},
 ): Promise<RoutingDecision> {
-  const classify = getClassifier(options.backend);
+  const { backend, ...routeOptions } = options;
+  const classify = getClassifier(backend);
   const classification = await classify(state);
-  return route(
-    classification,
-    options.table ?? DEFAULT_ROUTING_TABLE,
-    options.thresholds ?? DEFAULT_THRESHOLDS,
-  );
+  return route(classification, routeOptions);
 }

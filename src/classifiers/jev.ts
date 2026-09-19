@@ -5,56 +5,60 @@ import { readChoice, readNoul, systemOne } from "../typesafe.js";
 const DEFAULT_MODEL = "jev-latest";
 
 /**
- * One request, four questions. TypeSafe evaluates them in parallel against the
- * same state, so the three escalation signals cost latency-wise almost nothing
- * on top of the use-case Choice.
+ * One request, six questions. TypeSafe evaluates them in parallel against the
+ * same state, so the five Nouls cost almost nothing on top of the Choice.
  *
  * The Choice options use the structured what/not_for/examples shape because the
- * boundaries that matter here are the confusable ones: lookup vs analytics,
- * analytics vs investigation, communication vs deliverable.
+ * boundaries that matter here are the confusable ones: debug vs implement,
+ * refactor vs chore, review vs lookup.
  */
 const ROUTING_QUESTIONS = {
   use_case: {
     type: "choice",
     instructions: {
-      question: "What kind of work does this task ask for?",
+      question: "What kind of coding work does this task ask a worker agent to do?",
       focus: "Classify the primary work requested, not every topic mentioned.",
     },
     criteria: {
       lookup: {
-        what: "Retrieve a specific fact or record that already exists",
-        not_for: "Comparing or computing over data, or finding an unknown cause",
-        examples: ["What is this client's SIRET number?", "Which plan is this account on?"],
+        what: "Answer a question about the codebase without changing it",
+        not_for: "Judging the quality of a change, or finding the cause of a failure",
+        examples: ["Where is the retry logic defined?", "Which endpoints use this middleware?"],
       },
-      analytics: {
-        what: "Compare, aggregate, or compute over data that already exists",
-        not_for: "Retrieving one stored value, or diagnosing an unknown cause",
-        examples: ["Compare conversion rates month over month", "What is the payment failure rate this week?"],
+      review: {
+        what: "Judge an existing change or piece of code and report findings",
+        not_for: "Writing the change itself, or diagnosing a runtime failure",
+        examples: ["Review the auth diff", "Check this PR for security problems"],
       },
-      investigation: {
-        what: "Find the cause of something when the cause is not yet known",
-        not_for: "Computing a known metric, or retrieving a stored value",
-        examples: ["Why did the sync silently drop 12 appointments?", "Find the cause of these intermittent 500s"],
+      debug: {
+        what: "Find and fix the cause of a failure when the cause is not yet known",
+        not_for: "Building something new, or restructuring code that works",
+        examples: ["Fix the flaky auth test", "The webhook returns 500 intermittently, find out why"],
       },
-      summarization: {
-        what: "Condense existing content into a shorter form",
-        not_for: "Producing a standalone artifact, or writing a message to a person",
-        examples: ["Summarize this 40-message thread", "One-sentence recap of the last ticket"],
+      implement: {
+        what: "Build new behaviour that does not exist yet",
+        not_for: "Restructuring existing behaviour, or fixing something broken",
+        examples: ["Add a CSV export endpoint", "Implement the password reset flow"],
       },
-      communication: {
-        what: "Write a message addressed to a person",
-        not_for: "Producing a standalone document, or acting on a system",
-        examples: ["Draft a follow-up email about an overdue invoice", "Reply to this unhappy customer"],
+      refactor: {
+        what: "Restructure existing code without changing what it does",
+        not_for: "Adding behaviour, or fixing a bug",
+        examples: ["Extract the billing logic into its own module", "Replace the callback chain with async/await"],
       },
-      deliverable: {
-        what: "Produce a finished standalone artifact such as a document, report, or deck",
-        not_for: "A short message to a person, or condensing existing content",
-        examples: ["Write the full client onboarding guide", "Prepare the quarterly review deck"],
+      test: {
+        what: "Write or repair tests",
+        not_for: "Fixing the production code the tests cover",
+        examples: ["Add integration tests for the payment hub", "Backfill unit tests for the parser"],
       },
-      automation: {
-        what: "Take an action that changes state in a system",
-        not_for: "Reading, analyzing, or writing content without changing anything",
-        examples: ["Update the CRM stage for everyone who paid today", "Archive leads inactive for 90 days"],
+      docs: {
+        what: "Write or update documentation, comments or changelogs",
+        not_for: "Changing the code the documentation describes",
+        examples: ["Document the socket API", "Update the README install section"],
+      },
+      chore: {
+        what: "Mechanical or bulk work with a known, repetitive shape",
+        not_for: "Work needing judgment about how the result should look",
+        examples: ["Bump all dependencies to their latest minor", "Rename this symbol across the repo"],
       },
       other: {
         what: "None of the other options fit",
@@ -64,33 +68,31 @@ const ROUTING_QUESTIONS = {
   },
   spans_multiple_systems: {
     type: "noul",
-    instructions: "Resolving this task requires touching four or more distinct systems or data sources.",
+    instructions: "Completing this task requires touching four or more distinct systems, services or repositories.",
   },
   hard_to_reverse: {
     type: "noul",
-    instructions: "If the answer or action is wrong, the consequences are costly or hard to undo.",
+    instructions: "If the worker gets this wrong, the consequences are costly or hard to undo.",
     criteria: {
-      true: "Writes, deletes, sends, or otherwise changes state that someone would have to unwind",
-      false: "Read-only, or trivially corrected by running it again",
+      true: "Touches migrations, production data, deletions, published releases or shared infrastructure",
+      false: "Confined to a working copy and trivially corrected by trying again",
     },
   },
   craft_is_main_difficulty: {
     type: "noul",
     instructions:
-      "The main difficulty is the craft of the output (tone, polish, persuasiveness) rather than reaching a correct decision.",
+      "The main difficulty is design judgment — naming, structure, a public interface others depend on — rather than mechanical edits.",
   },
-  // Speculative: each of these only matters on some branches, and route() ignores
-  // them elsewhere. Questions run in parallel, so asking them always is close to free.
-  is_bulk_operation: {
+  is_bulk_mechanical: {
     type: "noul",
-    instructions: "The task applies to many records or entities at once rather than a single one.",
+    instructions: "The task is a repetitive edit applied across many files, with a known and uniform shape.",
   },
-  is_client_facing: {
+  needs_write_access: {
     type: "noul",
-    instructions: "The output will be seen by someone outside the company, such as a client or a prospect.",
+    instructions: "The worker must modify files to do this task.",
     criteria: {
-      true: "Goes to an external reader as-is",
-      false: "Stays internal, or is reviewed and rewritten before anyone outside sees it",
+      true: "Edits, creates or deletes files",
+      false: "Reads, analyses or reports only",
     },
   },
 };
@@ -103,6 +105,10 @@ function buildState(state: TaskState): unknown {
   return state.context ? { task: state.text, context: state.context } : { task: state.text };
 }
 
+/**
+ * The Jev step: one cheap, fast forward pass that answers a fixed set of typed
+ * questions about a task. It never writes prose — it only decides.
+ */
 export async function classifyWithJev(state: TaskState): Promise<Classification> {
   const startedAt = Date.now();
   const response = await systemOne({
@@ -121,8 +127,8 @@ export async function classifyWithJev(state: TaskState): Promise<Classification>
     spansMultipleSystems: readNoul(response.answers, "spans_multiple_systems"),
     hardToReverse: readNoul(response.answers, "hard_to_reverse"),
     craftIsMainDifficulty: readNoul(response.answers, "craft_is_main_difficulty"),
-    isBulkOperation: readNoul(response.answers, "is_bulk_operation"),
-    isClientFacing: readNoul(response.answers, "is_client_facing"),
+    isBulkMechanical: readNoul(response.answers, "is_bulk_mechanical"),
+    needsWriteAccess: readNoul(response.answers, "needs_write_access"),
     backend: "jev",
     latencyMs,
   };

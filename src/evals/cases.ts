@@ -7,25 +7,25 @@ export interface EvalCase {
 }
 
 /**
- * Seed set only. The post this project is based on makes the point explicitly:
- * routing should be pinned by evals against your OWN traffic, not vibes. Grow
- * this file with real messages from herd/herdr (and their correct label) as
- * you collect them — that's what turns DEFAULT_ROUTING_TABLE from a guess
- * into the "output of the work" the post describes.
+ * Seed set only. Routing should be pinned by evals against your OWN traffic,
+ * not vibes — grow this file with real task texts you have handed to herd
+ * workers, plus the class you would have picked for each.
  */
 export const EVAL_CASES: EvalCase[] = [
-  { id: "lookup-1", text: "Quel est le SIRET qu'on a enregistré pour le client Dupont SAS ?", expectedUseCase: "lookup" },
-  { id: "lookup-2", text: "Quel plan tarifaire GHL a ce compte client ?", expectedUseCase: "lookup" },
-  { id: "summarization-1", text: "Résume ce fil de 40 messages en 3 points.", expectedUseCase: "summarization" },
-  { id: "summarization-2", text: "Fais un résumé en une phrase du dernier ticket support.", expectedUseCase: "summarization" },
-  { id: "communication-1", text: "Rédige un email de relance pour une facture impayée.", expectedUseCase: "communication" },
-  { id: "communication-2", text: "Réponds à ce client mécontent sur le retard de livraison.", expectedUseCase: "communication" },
-  { id: "analytics-1", text: "Compare le taux de conversion des leads ce mois-ci vs le mois dernier, par campagne.", expectedUseCase: "analytics" },
-  { id: "analytics-2", text: "Quel est le taux d'échec des paiements sur ghl-payment-hub cette semaine ?", expectedUseCase: "analytics" },
-  { id: "investigation-1", text: "Comprends pourquoi la synchro doctolib-to-ghl a silencieusement perdu 12 rendez-vous hier.", expectedUseCase: "investigation" },
-  { id: "investigation-2", text: "Le webhook Crisp vers GHL a renvoyé des erreurs 500 par intermittence, trouve la cause.", expectedUseCase: "investigation" },
-  { id: "deliverable-1", text: "Rédige le guide complet d'onboarding pour les nouveaux clients, en PDF.", expectedUseCase: "deliverable" },
-  { id: "deliverable-2", text: "Prépare la présentation client pour le bilan trimestriel.", expectedUseCase: "deliverable" },
-  { id: "automation-1", text: "Mets à jour le statut GHL de chaque contact qui a payé sa facture aujourd'hui.", expectedUseCase: "automation" },
-  { id: "automation-2", text: "Archive automatiquement les leads inactifs depuis plus de 90 jours.", expectedUseCase: "automation" },
+  { id: "lookup-1", text: "Where is the retry logic for the webhook client defined?", expectedUseCase: "lookup" },
+  { id: "lookup-2", text: "Which endpoints currently go through the auth middleware?", expectedUseCase: "lookup" },
+  { id: "review-1", text: "Review the auth diff on this branch and report anything risky.", expectedUseCase: "review" },
+  { id: "review-2", text: "Check PR #214 for SQL injection and missing input validation.", expectedUseCase: "review" },
+  { id: "debug-1", text: "Fix the flaky auth test in tests/auth_test.py.", expectedUseCase: "debug" },
+  { id: "debug-2", text: "The Doctolib sync silently dropped 12 appointments yesterday, find out why and fix it.", expectedUseCase: "debug" },
+  { id: "implement-1", text: "Add a CSV export endpoint to the payment hub API.", expectedUseCase: "implement" },
+  { id: "implement-2", text: "Implement the password reset flow, including the email template.", expectedUseCase: "implement" },
+  { id: "refactor-1", text: "Extract the billing logic out of views.py into its own module.", expectedUseCase: "refactor" },
+  { id: "refactor-2", text: "Replace the callback chain in the GHL client with async/await.", expectedUseCase: "refactor" },
+  { id: "test-1", text: "Add integration tests covering the payment hub webhook handler.", expectedUseCase: "test" },
+  { id: "test-2", text: "Backfill unit tests for the invoice parser.", expectedUseCase: "test" },
+  { id: "docs-1", text: "Document the socket API in docs/socket-api.md.", expectedUseCase: "docs" },
+  { id: "docs-2", text: "Update the README install section for the new CLI.", expectedUseCase: "docs" },
+  { id: "chore-1", text: "Bump every dependency to its latest minor version and fix the lockfile.", expectedUseCase: "chore" },
+  { id: "chore-2", text: "Rename the symbol `fetchUser` to `loadUser` across the whole repo.", expectedUseCase: "chore" },
 ];
