@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { chooseModel } from "./chooseModel.js";
 import type { AgentKind, RoutingDecision } from "./types.js";
 
@@ -61,7 +63,7 @@ export function parseArgs(
   const text = words.join(" ").trim();
   if (!text) throw new UsageError("a task description is required");
 
-  kind ??= env.HERD_KIND as AgentKind | undefined;
+  kind ??= (env.HERD_KIND || undefined) as AgentKind | undefined;
   if (kind !== undefined && kind !== "claude" && kind !== "codex") {
     throw new UsageError(`invalid --kind "${kind}" (expected "claude" or "codex")`);
   }
@@ -96,6 +98,20 @@ async function main(): Promise<void> {
   console.log(formatDecision(decision, args.shell));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+/**
+ * Comparing raw strings (`import.meta.url === file://${process.argv[1]}`)
+ * breaks when the CLI is invoked through a symlink — e.g. an `npm link`
+ * global install — because import.meta.url resolves to the real file path
+ * while argv[1] keeps the symlink path. Resolve both to real paths first.
+ */
+function isMainModule(): boolean {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   await main();
 }
