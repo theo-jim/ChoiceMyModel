@@ -1,8 +1,24 @@
 #!/usr/bin/env node
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { chooseModel } from "./chooseModel.js";
 import type { AgentKind, RoutingDecision } from "./types.js";
+
+/**
+ * The npm scripts (dev/start/test/eval) load .env via `node --env-file-if-exists`,
+ * resolved against the cwd they're invoked from (the project root). The published
+ * `bin` entry has no such flag and is invoked as a global binary from arbitrary
+ * cwds (e.g. by herd-spawn), so .env must be resolved against the package
+ * directory itself, not process.cwd().
+ */
+function loadPackageEnvFile(): void {
+  const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const envPath = path.join(packageRoot, ".env");
+  if (existsSync(envPath)) {
+    process.loadEnvFile(envPath);
+  }
+}
 
 const USAGE = `usage: choicemymodel [--kind claude|codex] [--context <text>] [--shell] <task text>
 
@@ -79,6 +95,8 @@ export function formatDecision(decision: RoutingDecision, shell: boolean): strin
 }
 
 async function main(): Promise<void> {
+  loadPackageEnvFile();
+
   let args: CliArgs;
   try {
     args = parseArgs(process.argv.slice(2));
