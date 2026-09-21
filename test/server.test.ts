@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import { createChoiceServer, readBody, type ChoiceServerOptions } from "../src/server.js";
+import type { LoggedDecision } from "../src/observability/log.js";
 import type { RoutingDecision, TaskState } from "../src/types.js";
 
 function fakeDecision(): RoutingDecision {
@@ -31,6 +32,22 @@ function fakeDecision(): RoutingDecision {
   };
 }
 
+function fakeLoggedDecision(): LoggedDecision {
+  const decision = fakeDecision();
+  return {
+    id: "decision-123",
+    timestamp: "2026-09-20T12:00:00.000Z",
+    request: { text: "Add a CSV export endpoint", context: "repo: web", kind: "claude" },
+    classification: decision.classification,
+    decision: {
+      tier: decision.tier,
+      worker: decision.worker,
+      escalated: decision.escalated,
+      reasons: decision.reasons,
+    },
+  };
+}
+
 async function withServer(
   options: ChoiceServerOptions,
   run: (baseUrl: string) => Promise<void>,
@@ -51,6 +68,87 @@ test("GET /health returns ok", async () => {
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { ok: true });
   });
+});
+
+test("GET /decisions returns newest logged decisions and forwards limit", async () => {
+  let seenLimit: number | undefined;
+  await withServer(
+    {
+      choose: async () => fakeDecision(),
+      decisions: {
+        list: async (limit) => {
+          seenLimit = limit;
+          return [fakeLoggedDecision()];
+        },
+        promote: async () => ({ status: "promoted" }),
+      },
+    },
+    async (base) => {
+      const res = await fetch(`${base}/decisions?limit=3`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), [fakeLoggedDecision()]);
+      assert.equal(seenLimit, 3);
+    },
+  );
+});
+
+test("POST /decisions/:id/promote writes the human label", async () => {
+  let promoted: { id: string; expectedUseCase: string; expectedKind?: string } | undefined;
+  await withServer(
+    {
+      choose: async () => fakeDecision(),
+      decisions: {
+        list: async () => [],
+        promote: async (id, label) => {
+          promoted = { id, ...label };
+          return { status: "promoted" };
+        },
+      },
+    },
+    async (base) => {
+      const res = await fetch(`${base}/decisions/decision-123/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedUseCase: "debug", expectedKind: "codex" }),
+      });
+      assert.equal(res.status, 201);
+      assert.deepEqual(await res.json(), { promoted: true });
+      assert.deepEqual(promoted, {
+        id: "decision-123",
+        expectedUseCase: "debug",
+        expectedKind: "codex",
+      });
+    },
+  );
+});
+
+test("POST /decisions/:id/promote makes duplicate and missing decisions explicit", async () => {
+  await withServer(
+    {
+      choose: async () => fakeDecision(),
+      decisions: {
+        list: async () => [],
+        promote: async (id) => ({ status: id === "duplicate" ? "duplicate" : "notFound" }),
+      },
+    },
+    async (base) => {
+      const duplicate = await fetch(`${base}/decisions/duplicate/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedUseCase: "debug" }),
+      });
+      assert.equal(duplicate.status, 200);
+      assert.deepEqual(await duplicate.json(), { promoted: false, message: "evaluation case already exists" });
+
+      const missing = await fetch(`${base}/decisions/missing/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedUseCase: "debug" }),
+      });
+      assert.equal(missing.status, 404);
+      assert.deepEqual(await missing.json(), { error: "decision not found" });
+    },
+  );
 });
 
 test("POST /choose returns the routing decision and passes the task through", async () => {

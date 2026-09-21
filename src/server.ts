@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { chooseModel } from "./chooseModel.js";
-import type { AgentKind, RoutingDecision, TaskState } from "./types.js";
+import { createDecisionStore, type DecisionStore } from "./observability/promote.js";
+import { USE_CASES, type AgentKind, type RoutingDecision, type TaskState, type UseCase } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -57,6 +58,7 @@ export interface ChoiceServerOptions {
   /** Injectable for tests; defaults to the real classify+route pipeline. */
   choose?: ChooseFn;
   maxBodyBytes?: number;
+  decisions?: DecisionStore;
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -64,17 +66,111 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
+function sendHtml(res: ServerResponse, html: string): void {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
+function dashboardHtml(): string {
+  return `<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChoiceMyModel decisions</title>
+<style>body{font:14px system-ui,sans-serif;margin:24px;color:#18212f}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d7dce2;padding:8px;vertical-align:top;text-align:left}th{position:sticky;top:0;background:#f7f8fa}details{max-width:340px}pre{white-space:pre-wrap;max-width:500px}select,button{font:inherit;margin-top:4px}.muted{color:#64748b}.error{color:#b42318}</style>
+<h1>ChoiceMyModel decisions</h1><p class="muted">Human labels become eval cases; they do not reuse Jev’s prediction.</p>
+<p><label>Show <select id="limit"><option>25</option><option selected>50</option><option>100</option><option>200</option></select> latest decisions</label></p>
+<div id="status" class="muted">Loading…</div><table><thead><tr><th>Task</th><th>Jev</th><th>Noul signals</th><th>Route</th><th>Latency / time</th><th>Human ground truth</th></tr></thead><tbody id="rows"></tbody></table>
+<script>
+const uses=${JSON.stringify(USE_CASES)};
+const esc=value=>String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+const signals=["hardToReverse","spansMultipleSystems","craftIsMainDifficulty","isBulkMechanical","needsWriteAccess","vendorFit"];
+const options=(selected="")=>uses.map(use=>'<option'+(use===selected?' selected':'')+'>'+use+'</option>').join('');
+async function promote(id, form){const body={expectedUseCase:form.querySelector('.use').value};const kind=form.querySelector('.kind').value;if(kind)body.expectedKind=kind;const res=await fetch('/decisions/'+encodeURIComponent(id)+'/promote',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await res.json();form.querySelector('.result').textContent=data.message||(data.promoted?'Added to evals.':data.error);}
+function render(decisions){const rows=document.querySelector('#rows');rows.innerHTML=decisions.map(entry=>{const c=entry.classification,d=entry.decision,text=entry.request.text,short=text.length>120?text.slice(0,120)+'…':text;const probabilities=Object.entries(c.useCaseProbabilities||{}).map(([name,value])=>esc(name)+': '+Number(value).toFixed(2)).join('<br>');const signalText=signals.map(name=>esc(name)+': '+Number(c[name]).toFixed(2)).join('<br>');return '<tr><td><details><summary title="'+esc(text)+'">'+esc(short)+'</summary><pre>'+esc(text)+'</pre></details></td><td><strong>'+esc(c.useCase)+'</strong> ('+Number(c.useCaseConfidence).toFixed(2)+')<br>'+probabilities+'</td><td>'+signalText+'</td><td>'+esc(d.tier)+' / '+esc(d.worker.model)+'<br>escalated: '+esc(d.escalated)+'<br>'+esc((d.reasons||[]).join('; ')||'—')+'</td><td>'+esc(c.latencyMs)+' ms<br>'+esc(entry.timestamp)+'</td><td><form><select class="use">'+options()+'</select><select class="kind"><option value="">kind (optional)</option><option>claude</option><option>codex</option></select><br><button type="submit">Add eval case</button> <span class="result muted"></span></form></td></tr>';}).join('');for(const [index,form] of [...rows.querySelectorAll('form')].entries()){form.addEventListener('submit',event=>{event.preventDefault();promote(decisions[index].id,form).catch(error=>form.querySelector('.result').textContent=error.message);});}}
+async function load(){const limit=document.querySelector('#limit').value;const res=await fetch('/decisions?limit='+limit);if(!res.ok)throw new Error('Could not load decisions');const decisions=await res.json();render(decisions);document.querySelector('#status').textContent=decisions.length+' decisions';}
+document.querySelector('#limit').addEventListener('change',()=>load().catch(error=>document.querySelector('#status').textContent=error.message));load().catch(error=>{document.querySelector('#status').className='error';document.querySelector('#status').textContent=error.message;});
+</script></html>`;
+}
+
+function parseLimit(value: string | null): number | undefined {
+  if (value === null) return 50;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) return undefined;
+  return limit;
+}
+
 export function createChoiceServer(options: ChoiceServerOptions = {}): Server {
   const choose = options.choose ?? chooseModel;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const decisions = options.decisions ?? createDecisionStore();
 
   return createServer(async (req, res) => {
-    if (req.method === "GET" && req.url === "/health") {
+    const url = new URL(req.url ?? "/", "http://localhost");
+
+    if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, { ok: true });
       return;
     }
 
-    if (req.method === "POST" && req.url === "/choose") {
+    if (req.method === "GET" && url.pathname === "/decisions") {
+      const limit = parseLimit(url.searchParams.get("limit"));
+      if (limit === undefined) {
+        sendJson(res, 400, { error: '"limit" must be an integer from 1 to 200' });
+        return;
+      }
+      try {
+        sendJson(res, 200, await decisions.list(limit));
+      } catch (err) {
+        console.error("GET /decisions failed:", err);
+        sendJson(res, 500, { error: "failed to read decisions" });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/dashboard") {
+      sendHtml(res, dashboardHtml());
+      return;
+    }
+
+    const promoteMatch = req.method === "POST" && url.pathname.match(/^\/decisions\/([^/]+)\/promote$/);
+    if (promoteMatch) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req, maxBodyBytes));
+      } catch (err) {
+        sendJson(res, err instanceof PayloadTooLargeError ? 413 : 400, {
+          error: err instanceof PayloadTooLargeError ? "request body too large" : "invalid JSON request body",
+        });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, { error: "request body must be a JSON object" });
+        return;
+      }
+      const { expectedUseCase, expectedKind } = body as Record<string, unknown>;
+      if (typeof expectedUseCase !== "string" || !USE_CASES.includes(expectedUseCase as UseCase)) {
+        sendJson(res, 400, { error: '"expectedUseCase" must be a known use case' });
+        return;
+      }
+      if (expectedKind !== undefined && expectedKind !== "claude" && expectedKind !== "codex") {
+        sendJson(res, 400, { error: '"expectedKind" must be "claude" or "codex"' });
+        return;
+      }
+      try {
+        const result = await decisions.promote(decodeURIComponent(promoteMatch[1]), {
+          expectedUseCase: expectedUseCase as UseCase,
+          expectedKind: expectedKind as AgentKind | undefined,
+        });
+        if (result.status === "promoted") sendJson(res, 201, { promoted: true });
+        else if (result.status === "duplicate") sendJson(res, 200, { promoted: false, message: "evaluation case already exists" });
+        else sendJson(res, 404, { error: "decision not found" });
+      } catch (err) {
+        console.error("POST /decisions/:id/promote failed:", err);
+        sendJson(res, 500, { error: "failed to promote decision" });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/choose") {
       // Read + parse the request. Every failure here is the client's fault, so
       // it gets a 4xx and a message safe to show (it describes their input,
       // never our internals).
