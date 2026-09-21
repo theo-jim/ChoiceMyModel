@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { chooseModel } from "../src/chooseModel.js";
 import { logDecision } from "../src/observability/log.js";
+import { promoteDecision } from "../src/observability/promote.js";
 import type { RoutingDecision } from "../src/types.js";
 
 function fakeDecision(): RoutingDecision {
@@ -73,6 +75,49 @@ test("logDecision swallows an asynchronous write failure", async () => {
 
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(errors, ["Could not write routing decision: disk full"]);
+});
+
+test("default observability paths are anchored to the package root when cwd changes", async () => {
+  const originalCwd = process.cwd();
+  const foreignCwd = await mkdtemp(join(tmpdir(), "choicemymodel-foreign-cwd-"));
+  const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+  let loggedPath: string | undefined;
+  let readPath: string | undefined;
+  let evalCasesPath: string | undefined;
+
+  try {
+    process.chdir(foreignCwd);
+    logDecision(
+      { text: "Anchor this decision" },
+      undefined,
+      fakeDecision(),
+      { append: async (filePath) => { loggedPath = filePath; } },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const result = await promoteDecision(
+      "decision-123",
+      { expectedUseCase: "implement" },
+      {
+        read: async (filePath) => {
+          readPath = filePath;
+          return JSON.stringify({ id: "decision-123", request: { text: "Anchor this decision" } });
+        },
+        readEvalCases: async (filePath) => {
+          evalCasesPath = filePath;
+          return "export const EVAL_CASES = [\n];\n";
+        },
+        writeEvalCases: async () => {},
+      },
+    );
+
+    assert.deepEqual(result, { status: "promoted" });
+    assert.equal(loggedPath, resolve(packageRoot, "data/decisions.jsonl"));
+    assert.equal(readPath, resolve(packageRoot, "data/decisions.jsonl"));
+    assert.equal(evalCasesPath, resolve(packageRoot, "src/evals/cases.ts"));
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test("chooseModel records every completed routing decision", async () => {

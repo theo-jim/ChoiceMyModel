@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
 import { chooseModel } from "./chooseModel.js";
+import { resolvePackagePath } from "./packageRoot.js";
 import type { AgentKind, RoutingDecision } from "./types.js";
 
 /**
@@ -13,8 +13,7 @@ import type { AgentKind, RoutingDecision } from "./types.js";
  * directory itself, not process.cwd().
  */
 function loadPackageEnvFile(): void {
-  const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const envPath = path.join(packageRoot, ".env");
+  const envPath = resolvePackagePath(".env");
   if (existsSync(envPath)) {
     process.loadEnvFile(envPath);
   }

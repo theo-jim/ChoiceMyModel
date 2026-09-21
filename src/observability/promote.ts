@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { readLoggedDecisions, recentLoggedDecisions, type DecisionLogOptions } from "./log.js";
+import { resolvePackagePath } from "../packageRoot.js";
 import type { AgentKind, UseCase } from "../types.js";
 
 export interface PromotionLabel {
@@ -25,7 +25,7 @@ export interface PromotionOptions extends DecisionLogOptions {
 }
 
 function defaultEvalCasesPath(): string {
-  return resolve(process.cwd(), "src/evals/cases.ts");
+  return resolvePackagePath("src/evals/cases.ts");
 }
 
 function renderCase(id: string, text: string, label: PromotionLabel, eol: string): string {

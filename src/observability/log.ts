@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
+import { resolvePackagePath } from "../packageRoot.js";
 import type { AgentKind, Classification, RoutingDecision, TaskState, WorkerChoice } from "../types.js";
 
 export interface LoggedDecision {
@@ -30,7 +31,7 @@ export interface DecisionLogOptions {
 }
 
 function defaultPath(): string {
-  return resolve(process.cwd(), "data/decisions.jsonl");
+  return resolvePackagePath("data/decisions.jsonl");
 }
 
 async function appendToFile(filePath: string, line: string): Promise<void> {
