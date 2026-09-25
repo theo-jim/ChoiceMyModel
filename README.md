@@ -22,30 +22,62 @@ l'abstrait — il reconnaît une classe déjà évaluée.
         │
         ▼
   classify()  ──▶  POST api.typesafe.ai/v1/systemone   (model: jev-latest)
-        │           1 Choice : quelle classe de tâche ?  (lookup, review, debug, implement,
+        │           3 Choice : quelle classe de tâche ? (lookup, review, debug, implement,
         │                      refactor, test, docs, chore, other)
-        │           5 Noul   : 4+ systèmes ? difficile à annuler ? jugement de conception ?
-        │                      travail mécanique en masse ? besoin d'écrire des fichiers ?
+        │                      quel est l'effet le plus étendu de l'exécution ? (read_only,
+        │                      local_write, external_effect)
+        │                      quel schéma de raisonnement le worker doit-il suivre ? (direct,
+        │                      bounded, iterative, deep)
+        │           3 Noul   : 4+ systèmes ? difficile à annuler ? mécanique en masse ou
+        │                      jugement de conception ?
         │           (les 6 questions évaluées en parallèle dans le même appel)
         ▼
-   route()    ──▶  classe → tier (light/mid/frontier), puis tier → modèle du roster choisi
+   route()    ──▶  classe → tier (light/mid/frontier), puis tier → sélecteur du roster choisi ;
+        │           côté codex, schéma de raisonnement → effort (selectReasoningEffort, découplé
+        │           du tier)
         ▼
--k claude -a '--model claude-sonnet-5 --permission-mode acceptEdits'
+chooseModel() ──▶  côté codex seulement : résout le sélecteur en vrai id de modèle via
+        │           ~/.codex/config.toml (voir src/codexModel.ts)
+        ▼
+-k claude -a '--model sonnet --permission-mode acceptEdits'
 ```
 
 La table de routage parle en **tiers**, pas en noms de modèles : ce que les évals apprennent
 (« un lookup tient le score sur le tier light ») est une propriété de la classe de tâche, pas du
-vendeur. Chaque vendeur a son propre roster.
+vendeur. Chaque vendeur a son propre roster, mais aucun des deux n'y fige un id de modèle : côté
+claude ce sont des alias nus que le CLI résout lui-même, côté codex un suffixe de tier dont le
+préfixe de version est lu dans la config Codex à l'exécution (`chooseModel()`, jamais `route()`).
 
-| Tier | claude | codex |
-| --- | --- | --- |
-| light | `claude-haiku-4-5` | `gpt-5.6-luna` + `model_reasoning_effort=low` |
-| mid | `claude-sonnet-5` | `gpt-5.6-terra` + `model_reasoning_effort=high` |
-| frontier | `claude-opus-5` | `gpt-5.6-sol` + `model_reasoning_effort=xhigh` |
+| Tier | claude (`--model`) | codex (roster) | codex (résolu, exemple) |
+| --- | --- | --- | --- |
+| light | `haiku` | `luna` | `gpt-5.6-luna` |
+| mid | `sonnet` | `terra` | `gpt-5.6-terra` |
+| frontier | `opus` | `sol` | `gpt-5.6-sol` |
 
-Les niveaux de reasoning codex suivent la recommandation de herd (Luna pour le mécanique, Terra
-pour le code ordinaire, Sol réservé aux problèmes vraiment durs). Claude Code n'a pas de flag
-équivalent, donc le tier seul y porte la décision.
+Le roster ne fixe plus l'effort de raisonnement codex par tier. `model_reasoning_effort` est une
+décision séparée (`selectReasoningEffort()`), dérivée du signal `reasoning_demand` :
+
+| `reasoning_demand` | Effort de base |
+| --- | --- |
+| `direct` | `low` |
+| `bounded` | `medium` |
+| `iterative` | `high` |
+| `deep` | `xhigh` |
+
+Plusieurs garde-fous peuvent seulement faire monter cet effort, jamais le baisser : une confiance
+faible sur `reasoning_demand` le monte d'un cran ; une classe de tâche incertaine (le même plancher
+que `route()` vérifie pour le tier) interdit `low`, plancher à `medium` ; un risque critique qui
+force déjà le tier frontier (`hard_to_reverse`, ou `execution_scope: external_effect`) interdit
+aussi `low` — un tier frontier avec un effort `low` contredirait l'intention même du forçage de
+tier. Un `reasoning_demand` non reconnu (valeur hors des quatre attendues, ou absente) tombe sur
+`medium` plutôt que de laisser `undefined` se propager jusqu'à `model_reasoning_effort=undefined`
+dans les args rendus. Un même `reasoning_demand` donne donc le même effort qu'il tombe sur le tier
+light ou frontier : c'est volontaire, l'effort de raisonnement et le tier mesurent deux choses
+différentes (la forme du raisonnement requis, pas la capacité du modèle). `none` et `max` ne sont
+jamais choisis automatiquement — uniquement via un override explicite (`RouteOptions.effort`,
+valide seulement si le vendeur résolu est codex ; sinon `route()` lève une erreur explicite plutôt
+que d'ignorer l'override en silence). Claude Code n'a pas de flag équivalent, donc le tier seul y
+porte la décision de modèle.
 
 ## Usage
 
@@ -68,6 +100,12 @@ $ choicemymodel "Review the auth diff" --kind codex
   "reasons": []
 }
 ```
+
+`effortReason` apparaît en plus de `reasons` quand un garde-fou d'effort s'est déclenché (par
+exemple `"low confidence on reasoning demand, effort raised one step"`) : un champ séparé, pour
+qu'un code qui lit `reasons` ne puisse jamais confondre un ajustement d'effort avec une raison
+d'escalade de tier. `vendorFallbackReason` apparaît de la même façon quand `chooseModel()` a dû
+retomber sur claude faute de config codex utilisable (voir plus bas).
 
 Depuis un script shell :
 
@@ -94,10 +132,10 @@ modèle sort de son jugement.
 
 | Tâche | Classe | Décision |
 | --- | --- | --- |
-| Review the auth diff | `review` | codex terra, **`--sandbox read-only`** (aucune écriture nécessaire) |
-| Fix the flaky auth test | `debug` | claude sonnet-5, `acceptEdits` |
+| Review the auth diff | `review` | codex terra, **`--sandbox read-only`** (`execution_scope: read_only`) |
+| Fix the flaky auth test | `debug` | claude sonnet, `acceptEdits` |
 | Rename `fetchUser` across the repo | `chore` | codex luna à `low` — mécanique en masse, on descend |
-| Migrate the payments schema and backfill | `implement` | claude opus-5 — *hard to reverse* + *spans 4+ systems* |
+| Migrate the payments schema and backfill | `implement` | claude opus — *hard to reverse* force le tier frontier |
 
 ## Les choix de conception qui viennent de la doc TypeSafe
 
@@ -105,15 +143,26 @@ modèle sort de son jugement.
   nom de question et par option : `answers.use_case.choice` est l'union littérale de mes propres
   classes, donc plus aucun narrowing à la main. Timeout, retries, `baseURL` et modèle par défaut
   viennent du SDK et de ses variables d'environnement.
-- **Une seule requête, sept questions**, évaluées en parallèle : les six Noul ne coûtent presque
-  rien de plus que le Choice.
-- **Speculative fan-out.** `is_bulk_mechanical` n'est lue que sur `chore` et `refactor`,
-  `needs_write_access` sert à choisir le sandbox codex. Poser d'avance une question qui ne servira
-  peut-être pas coûte moins cher qu'un second aller-retour.
-- **Le vendeur (claude vs codex) est aussi une décision de Jev, pas une entrée manuelle.**
-  `vendorFit` (le Noul `codex_is_better_fit`) dit si le travail est plutôt mécanique en masse avec
-  un raisonnement calibrable (codex) ou une affaire de jugement/nuance (claude). `--kind` /
-  `HERD_KIND` restent une échappatoire : s'ils sont fournis, ils priment toujours sur `vendorFit`.
+- **Une seule requête, six questions**, évaluées en parallèle : les trois Noul ne coûtent presque
+  rien de plus que les trois Choice.
+- **L'effort de raisonnement codex est découplé du tier.** `reasoning_demand` (Choice à 4 valeurs
+  ordinales) mesure la forme du raisonnement requis par la tâche, pas son enjeu ni sa portée ;
+  `selectReasoningEffort()` en tire l'effort indépendamment du tier — même `reasoning_demand`, même
+  effort, que la tâche atterrisse en light ou en frontier. Le tier répond à « quelle capacité de
+  modèle ? », l'effort à « combien d'itération sur le chemin de résolution ? » : deux questions
+  différentes, plus de mapping fixe entre les deux.
+- **Un seul signal pour mécanique-en-masse vs jugement-de-conception.** `solution_shape` remplace
+  les deux anciens Noul quasi-inverses (`craft_is_main_difficulty` / `is_bulk_mechanical`) : lu sur
+  `chore`/`refactor` pour la désescalade, et sur `implement`/`refactor` seulement pour l'escalade
+  côté conception — les seules classes où « jugement de conception » a un sens réel. Sur les autres
+  (`lookup`, `debug`, `review`, `docs`…) le Noul répond quand même une valeur proche de 0 ou 1, mais
+  cette réponse ne veut rien dire pour ces classes ; y lire une raison d'escalade aurait fait monter
+  des lookups en mid et des debugs en frontier sur un signal hors sujet.
+- **Le vendeur (claude vs codex) part d'une table par défaut, pas d'un Noul dédié.**
+  `DEFAULT_VENDOR_TABLE` fixe un vendeur par classe (claude par défaut, codex pour `chore`/`test`),
+  et `solution_shape` peut la retourner à ses extrêmes : fortement mécanique bascule vers codex même
+  si la table dit claude, fortement jugement de conception reste sur claude même si la table dit
+  codex. `--kind` / `HERD_KIND` restent une échappatoire : s'ils sont fournis, ils priment toujours.
 - **Des critères structurés** (`what` / `not_for` / `examples`) sur les options du Choice, pour les
   frontières qui se confondent : debug vs implement, refactor vs chore, review vs lookup.
 - **Les Noul renvoient une probabilité**, donc le seuil (0.7) est un curseur de tolérance au
@@ -123,10 +172,33 @@ modèle sort de son jugement.
 - **Le mécanique en masse descend d'un cran, mais jamais au détriment d'un signal de risque** — « en
   masse » *et* « difficile à annuler » est la combinaison la plus dangereuse, pas une raison
   d'économiser.
-- **Moindre privilège pour les deux vendeurs.** Une tâche que le classifieur juge sans écriture
-  (`needs_write_access` faible) obtient un worker en lecture seule : `--permission-mode plan` pour
-  claude (analyse seule, aucune édition), `--sandbox read-only` pour codex. Une tâche qui écrit
-  garde `acceptEdits` / `workspace-write`.
+- **Un risque critique force le tier frontier, il ne se contente pas d'escalader d'un cran.**
+  `hard_to_reverse` et `execution_scope: external_effect` sautent directement au tier frontier ;
+  les autres signaux (portée multi-systèmes, jugement de conception, confiance faible) escaladent
+  toujours d'un seul cran, même combinés entre eux — un OR de signaux faibles n'a jamais le même
+  effet qu'un seul signal fort.
+- **Moindre privilège pour les deux vendeurs, sur trois niveaux (`execution_scope`).**
+  `read_only` obtient un worker en lecture seule (`--permission-mode plan` pour claude,
+  `--sandbox read-only` pour codex). `local_write` obtient `acceptEdits` / `workspace-write`.
+  `external_effect` obtient aussi `acceptEdits` / `workspace-write`, mais contribue en plus au
+  risque critique ci-dessus : un effet qui sort de la copie de travail mérite le meilleur modèle,
+  pas seulement le bon mode d'écriture.
+- **Aucun id de modèle codex figé dans le code.** Le roster ne connaît que le suffixe de tier
+  (`luna`/`terra`/`sol`) ; `chooseModel()` lit `~/.codex/config.toml` pour en tirer le préfixe de
+  version au moment de l'appel (`src/codexModel.ts`, parsé avec `smol-toml` — un vrai parseur TOML,
+  sans dépendances transitives, plutôt qu'un scan ligne à ligne maison qui se plantait sur les
+  chaînes littérales, les clés quotées et les tableaux/chaînes multi-lignes). Le profil actif
+  (`profile = "…"` + `[profiles.…]`) prime sur le `model` de premier niveau, comme le fait Codex
+  lui-même. Cette lecture a lieu sur la machine qui exécute `chooseModel()` — le CLI local, c'est la
+  même machine que le worker ; un serveur déployé ailleurs peut lire une config différente de celle
+  de la machine qui lancera effectivement le worker, en silence.
+  Config absente, illisible, invalide ou valeur hors schéma : si le vendeur codex a été demandé
+  explicitement (`--kind codex`), échec explicite avec un message actionnable, jamais un repli
+  silencieux vers un id codé en dur. Si le vendeur a été auto-pické (`DEFAULT_VENDOR_TABLE` /
+  `solution_shape`, pas de `--kind` explicite), `chooseModel()` retombe sur claude plutôt que de
+  faire échouer un appel que l'appelant n'a jamais demandé de figer sur codex — la raison
+  (`vendorFallbackReason`) est journalisée, jamais perdue. `route()` reste pur et synchrone : seule
+  cette résolution touche le système de fichiers, et uniquement depuis `chooseModel()`.
 
 ## Ce qui a été volontairement écarté
 
@@ -142,6 +214,11 @@ modèle sort de son jugement.
 - **`DEFAULT_ROUTING_TABLE`** est une heuristique, pas une table dérivée d'évals réelles. Fais
   grossir `src/evals/cases.ts` avec de vraies tâches que tu as données à des workers, puis
   `npm run eval` pour l'ajuster classe par classe.
+- **Les seuils `0.6`/`0.7` sont posés à l'aveugle**, pas calibrés sur des données réelles. Le log
+  JSONL (`src/observability/log.ts`) et le dashboard (`/dashboard`) portent maintenant
+  `reasoningDemand`/`reasoningDemandConfidence` (via `classification`) et `effortReason` /
+  `vendorFallbackReason` (via `decision`), pour qu'un jour ces seuils se règlent sur de vraies
+  décisions plutôt que sur une intuition.
 - **Rien n'a été testé contre les API réelles** : aucune clé disponible, et `api.typesafe.ai` est
   bloqué par le proxy. Vérifiés (`npm run typecheck` couvre `src` *et* `test`, `npm test`) : le
   routeur, le classifieur Jev à travers son SDK contre un `fetch` stubbé — corps de requête

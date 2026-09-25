@@ -1,6 +1,8 @@
 import type {
   AgentKind,
   Classification,
+  ExecutionScope,
+  ReasoningDemand,
   ReasoningEffort,
   RoutingDecision,
   RoutingTable,
@@ -11,29 +13,32 @@ import type {
 } from "./types.js";
 
 interface RosterEntry {
+  /**
+   * For claude: a bare --model alias ("haiku"/"sonnet"/"opus") the claude CLI
+   * resolves itself. For codex: the tier suffix ("luna"/"terra"/"sol"); the
+   * version prefix in front of it is resolved at runtime by
+   * resolveCodexModel() (see codexModel.ts), never hardcoded here.
+   */
   model: string;
-  effort?: ReasoningEffort;
 }
 
 /**
  * One roster per agent kind, so the routing table stays vendor-independent:
  * what the evals teach you ("a lookup holds its score on the light tier") is a
- * fact about the task class, not about a vendor.
- *
- * Codex effort levels follow herd's own guidance: Luna at low for bulk
- * mechanical work, Terra at high for ordinary coding, Sol at xhigh reserved for
- * genuinely hard problems. Claude Code has no reasoning-effort flag.
+ * fact about the task class, not about a vendor. The roster only picks the
+ * model; codex's reasoning effort is a separate decision (selectReasoningEffort
+ * below), decoupled from tier on purpose.
  */
 export const ROSTERS: Record<AgentKind, Record<Tier, RosterEntry>> = {
   claude: {
-    light: { model: "claude-haiku-4-5" },
-    mid: { model: "claude-sonnet-5" },
-    frontier: { model: "claude-opus-5" },
+    light: { model: "haiku" },
+    mid: { model: "sonnet" },
+    frontier: { model: "opus" },
   },
   codex: {
-    light: { model: "gpt-5.6-luna", effort: "low" },
-    mid: { model: "gpt-5.6-terra", effort: "high" },
-    frontier: { model: "gpt-5.6-sol", effort: "xhigh" },
+    light: { model: "luna" },
+    mid: { model: "terra" },
+    frontier: { model: "sol" },
   },
 };
 
@@ -69,6 +74,7 @@ export const DEFAULT_THRESHOLDS: RoutingThresholds = {
     debug: 0.6,
     refactor: 0.6,
   },
+  reasoningDemandConfidence: 0.6,
 };
 
 function escalate(tier: Tier): Tier {
@@ -80,24 +86,149 @@ function deescalate(tier: Tier): Tier {
   return TIER_ORDER[Math.max(TIER_ORDER.indexOf(tier) - 1, 0)];
 }
 
-/** Vendor pick when the caller has no opinion: Jev's vendorFit noul against the same yes/no bar as every other risk signal. */
+/**
+ * Vendor pick when the caller has no opinion. A simple, documented default per
+ * use case, adjustable once evals against real traffic say otherwise: most
+ * classes default to claude, chore and test to codex.
+ */
+export const DEFAULT_VENDOR_TABLE: Record<UseCase, AgentKind> = {
+  lookup: "claude",
+  review: "claude",
+  debug: "claude",
+  implement: "claude",
+  refactor: "claude",
+  docs: "claude",
+  other: "claude",
+  chore: "codex",
+  test: "codex",
+};
+
+/**
+ * Vendor pick when the caller has no opinion: the default table, overridden by
+ * the merged solutionShape signal only at its strong ends — a bulk/mechanical
+ * task moves to codex even if its class defaults to claude, and a task where
+ * design judgment dominates stays on claude even if its class defaults to
+ * codex. options.kind (checked by the caller) always wins over both.
+ */
 function pickVendor(classification: Classification, thresholds: RoutingThresholds): AgentKind {
-  return classification.vendorFit >= thresholds.noul ? "codex" : "claude";
+  const tableVendor = DEFAULT_VENDOR_TABLE[classification.useCase] ?? "claude";
+  const isBulkMechanical = classification.solutionShape >= thresholds.noul;
+  const isCraftDominant = classification.solutionShape <= 1 - thresholds.noul;
+
+  if (tableVendor === "claude" && isBulkMechanical) return "codex";
+  if (tableVendor === "codex" && isCraftDominant) return "claude";
+  return tableVendor;
+}
+
+/** Base mapping from the reasoning pattern a task demands to codex's reasoning effort, independent of tier. */
+const REASONING_EFFORT_BASE: Record<ReasoningDemand, ReasoningEffort> = {
+  direct: "low",
+  bounded: "medium",
+  iterative: "high",
+  deep: "xhigh",
+};
+
+/** Automatic selection only ever moves within this range; "none" and "max" require an explicit RouteOptions.effort override. */
+const EFFORT_ESCALATION_ORDER: ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
+
+function bumpEffort(effort: ReasoningEffort): ReasoningEffort {
+  const i = EFFORT_ESCALATION_ORDER.indexOf(effort);
+  return EFFORT_ESCALATION_ORDER[Math.min(i + 1, EFFORT_ESCALATION_ORDER.length - 1)];
+}
+
+export interface EffortSelection {
+  effort: ReasoningEffort;
+  /** Set only when a guard rail moved the effort away from the base mapping. */
+  reason?: string;
+}
+
+/**
+ * Picks codex's reasoning effort from the task's reasoning demand alone — NOT
+ * from the tier, so the same reasoningDemand always yields the same effort
+ * regardless of which tier the task landed on.
+ *
+ * Guard rails can only raise the base mapping, never lower it:
+ * - an unrecognized reasoningDemand (a defensive check: Jev is expected to
+ *   only ever answer one of the four known values) defaults to "medium"
+ *   rather than letting `undefined` reach the rendered args;
+ * - low confidence on reasoningDemand itself bumps the effort up one step;
+ * - a use case the classifier is unsure about (the same floor route() checks)
+ *   never gets "low" effort, since a wrong class guess makes "direct" an
+ *   unreliable read;
+ * - a critical risk that forces route() straight to the frontier tier
+ *   (hard_to_reverse, or an external_effect scope — mirrors route()'s own
+ *   criticalRisk check) never gets "low" effort either: a task serious enough
+ *   to demand the best model shouldn't also get the laziest effort setting.
+ *
+ * The use-case and critical-risk floors are re-derived here rather than
+ * passed in, so this function keeps its two-argument, independently testable
+ * signature.
+ */
+export function selectReasoningEffort(
+  classification: Classification,
+  thresholds: RoutingThresholds,
+): EffortSelection {
+  // reasoningDemand comes from an external classifier; index as a Partial map
+  // so an unexpected value degrades to a safe default instead of `undefined`.
+  const baseEffort = (REASONING_EFFORT_BASE as Partial<Record<string, ReasoningEffort>>)[
+    classification.reasoningDemand
+  ];
+  let effort: ReasoningEffort = baseEffort ?? "medium";
+  let reason: string | undefined =
+    baseEffort === undefined ? "unrecognized reasoning demand, effort defaulted to medium" : undefined;
+
+  // Falls back to the shipped default when a caller passes a partial custom
+  // RoutingThresholds that omits this field: `x < undefined` is always false
+  // in JS, which would otherwise silently disable this guard rail.
+  const reasoningConfidenceFloor =
+    thresholds.reasoningDemandConfidence ?? DEFAULT_THRESHOLDS.reasoningDemandConfidence;
+  if (classification.reasoningDemandConfidence < reasoningConfidenceFloor) {
+    effort = bumpEffort(effort);
+    reason = "low confidence on reasoning demand, effort raised one step";
+  }
+
+  const confidenceFloor =
+    thresholds.useCaseConfidenceFloors?.[classification.useCase] ?? thresholds.minUseCaseConfidence;
+  if (classification.useCaseConfidence < confidenceFloor && effort === "low") {
+    effort = "medium";
+    reason = "classifier unsure which task class this is, effort floored at medium";
+  }
+
+  const criticalRisk =
+    classification.hardToReverse >= thresholds.noul || classification.executionScope === "external_effect";
+  if (criticalRisk && effort === "low") {
+    effort = "medium";
+    reason = "critical risk forces the frontier tier, effort floored at medium";
+  }
+
+  return { effort, reason };
 }
 
 /**
  * Renders herd-spawn's -a value. For claude the permission flag has to be
  * re-included because passing -a replaces herd's default entirely.
  *
- * Least privilege applies to both vendors: a task the classifier says needs no
- * writes gets a read-only worker. For claude that is herd's `plan` permission
- * mode (analyse only, no edits); for codex it is the `read-only` sandbox.
+ * Least privilege applies to both vendors: a read-only task gets a read-only
+ * worker (claude's `plan` permission mode, codex's `read-only` sandbox); any
+ * write, local or external, needs the write-capable mode.
+ *
+ * codexModel, when given, overrides the roster's tier suffix with an already
+ * resolved model id (see chooseModel()); route() itself never passes it, so
+ * this stays synchronous and filesystem-free. Codex callers must supply
+ * effort — route() always does, having just computed it via
+ * selectReasoningEffort() or taken it from options.effort.
  */
-export function renderWorker(kind: AgentKind, tier: Tier, needsWrite: boolean): WorkerChoice {
+export function renderWorker(
+  kind: AgentKind,
+  tier: Tier,
+  executionScope: ExecutionScope,
+  effort?: ReasoningEffort,
+  codexModel?: string,
+): WorkerChoice {
   const entry = ROSTERS[kind][tier];
 
   if (kind === "claude") {
-    const permissionMode = needsWrite ? "acceptEdits" : "plan";
+    const permissionMode = executionScope === "read_only" ? "plan" : "acceptEdits";
     return {
       kind,
       model: entry.model,
@@ -105,12 +236,13 @@ export function renderWorker(kind: AgentKind, tier: Tier, needsWrite: boolean): 
     };
   }
 
-  const sandbox = needsWrite ? "workspace-write" : "read-only";
+  const sandbox = executionScope === "read_only" ? "read-only" : "workspace-write";
+  const model = codexModel ?? entry.model;
   return {
     kind,
-    model: entry.model,
-    effort: entry.effort,
-    args: `-m ${entry.model} -c model_reasoning_effort=${entry.effort} --sandbox ${sandbox}`,
+    model,
+    effort,
+    args: `-m ${model} -c model_reasoning_effort=${effort} --sandbox ${sandbox}`,
   };
 }
 
@@ -118,6 +250,8 @@ export interface RouteOptions {
   kind?: AgentKind;
   table?: RoutingTable;
   thresholds?: RoutingThresholds;
+  /** Overrides the automatic codex reasoning effort. Only valid when the resolved kind is "codex". */
+  effort?: ReasoningEffort;
 }
 
 /**
@@ -132,14 +266,31 @@ export function route(classification: Classification, options: RouteOptions = {}
   const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
   const kind = options.kind ?? pickVendor(classification, thresholds);
 
-  const { useCase } = classification;
+  if (kind === "claude" && options.effort !== undefined) {
+    throw new Error(
+      'RouteOptions.effort only applies to codex; the resolved kind here is "claude", so it would be silently ignored.',
+    );
+  }
+
+  const { useCase, executionScope } = classification;
   const baseTier = table[useCase] ?? "mid";
   const isYes = (noul: number) => noul >= thresholds.noul;
+  const isNo = (noul: number) => noul <= 1 - thresholds.noul;
 
   const reasons: string[] = [];
   if (isYes(classification.hardToReverse)) reasons.push("hard to reverse if wrong");
+  if (executionScope === "external_effect") reasons.push("has an effect outside the working copy");
   if (isYes(classification.spansMultipleSystems)) reasons.push("spans 4+ systems");
-  if (isYes(classification.craftIsMainDifficulty)) reasons.push("design judgment is the main difficulty");
+  // solutionShape reads as a real craft-vs-mechanical spectrum only on classes
+  // where "design judgment" is a meaningful axis. On lookup/debug/review/docs
+  // etc. the noul still returns a near-0/1 answer (it has to answer
+  // something), but that answer doesn't mean anything for those classes, so
+  // reading it there was escalating lookups and debugs on a signal that
+  // wasn't measuring what its name claims.
+  const designJudgmentApplies = useCase === "implement" || useCase === "refactor";
+  if (designJudgmentApplies && isNo(classification.solutionShape)) {
+    reasons.push("design judgment is the main difficulty");
+  }
 
   const confidenceFloor =
     thresholds.useCaseConfidenceFloors?.[useCase] ?? thresholds.minUseCaseConfidence;
@@ -151,22 +302,44 @@ export function route(classification: Classification, options: RouteOptions = {}
   // once nothing risky has fired: bulk AND hard-to-reverse is the most
   // dangerous combination, not a reason to go cheaper.
   const bulkMechanical =
-    (useCase === "chore" || useCase === "refactor") && isYes(classification.isBulkMechanical);
+    (useCase === "chore" || useCase === "refactor") && isYes(classification.solutionShape);
+
+  // hard_to_reverse and an external_effect scope are critical risk: they jump
+  // straight to the frontier tier instead of a one-tier escalate, so a single
+  // strong risk signal isn't watered down to the same effect as an escalate
+  // that several weaker signals would also trigger. Weaker signals above still
+  // only ever escalate by one tier, however many of them fire together.
+  const criticalRisk = isYes(classification.hardToReverse) || executionScope === "external_effect";
 
   let tier = baseTier;
-  if (reasons.length > 0) {
+  if (criticalRisk) {
+    tier = "frontier";
+  } else if (reasons.length > 0) {
     tier = escalate(baseTier);
   } else if (bulkMechanical) {
     tier = deescalate(baseTier);
     if (tier !== baseTier) reasons.push("bulk mechanical work, dropped a tier");
   }
 
+  let effort: ReasoningEffort | undefined;
+  let effortReason: string | undefined;
+  if (kind === "codex") {
+    if (options.effort !== undefined) {
+      effort = options.effort;
+    } else {
+      const selection = selectReasoningEffort(classification, thresholds);
+      effort = selection.effort;
+      effortReason = selection.reason;
+    }
+  }
+
   return {
     tier,
-    worker: renderWorker(kind, tier, isYes(classification.needsWriteAccess)),
+    worker: renderWorker(kind, tier, executionScope, effort),
     classification,
     escalated: TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(baseTier),
     reasons,
+    effortReason,
   };
 }
 

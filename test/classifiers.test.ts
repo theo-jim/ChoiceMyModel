@@ -37,10 +37,19 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
           },
           spans_multiple_systems: { type: "noul", noul: 0.1 },
           hard_to_reverse: { type: "noul", noul: 0.2 },
-          craft_is_main_difficulty: { type: "noul", noul: 0.3 },
-          is_bulk_mechanical: { type: "noul", noul: 0.05 },
-          needs_write_access: { type: "noul", noul: 0.9 },
-          codex_is_better_fit: { type: "noul", noul: 0.15 },
+          solution_shape: { type: "noul", noul: 0.3 },
+          execution_scope: {
+            type: "choice",
+            choice: "local_write",
+            confidence: 0.88,
+            probabilities: { read_only: 0.02, local_write: 0.88, external_effect: 0.1 },
+          },
+          reasoning_demand: {
+            type: "choice",
+            choice: "iterative",
+            confidence: 0.71,
+            probabilities: { direct: 0.02, bounded: 0.12, iterative: 0.71, deep: 0.15 },
+          },
         },
         model: "jev-latest",
         usage: { input_tokens: 10, output_tokens: 5 },
@@ -58,8 +67,16 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.equal(result.useCaseConfidence, 0.82);
   assert.deepEqual(result.useCaseProbabilities, { debug: 0.82, implement: 0.1, other: 0.08 });
   assert.equal(result.hardToReverse, 0.2);
-  assert.equal(result.needsWriteAccess, 0.9);
-  assert.equal(result.vendorFit, 0.15);
+  assert.equal(result.solutionShape, 0.3);
+  assert.equal(result.executionScope, "local_write");
+  assert.equal(result.reasoningDemand, "iterative");
+  assert.equal(result.reasoningDemandConfidence, 0.71);
+  assert.deepEqual(result.reasoningDemandProbabilities, {
+    direct: 0.02,
+    bounded: 0.12,
+    iterative: 0.71,
+    deep: 0.15,
+  });
   assert.ok(result.latencyMs >= 0);
 
   // The request actually carried the task state and the routing questions.
@@ -68,6 +85,7 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.equal(body.state.task, "The webhook returns 500 intermittently, find out why");
   assert.equal(body.state.context, "repo: payments");
   assert.ok("use_case" in body.questions);
-  assert.ok("needs_write_access" in body.questions);
-  assert.ok("codex_is_better_fit" in body.questions);
+  assert.ok("solution_shape" in body.questions);
+  assert.ok("execution_scope" in body.questions);
+  assert.ok("reasoning_demand" in body.questions);
 });

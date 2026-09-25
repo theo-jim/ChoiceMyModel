@@ -40,7 +40,8 @@ async function main() {
   let vendorTotal = 0;
 
   // No `kind` passed to route(): the eval exercises Jev's own vendor pick
-  // (vendorFit), not an override from HERD_KIND.
+  // (the default vendor table plus the solutionShape override), not an
+  // override from HERD_KIND.
   for (const evalCase of EVAL_CASES) {
     const classification = await classifyWithJev({ text: evalCase.text });
     const decision = route(classification);

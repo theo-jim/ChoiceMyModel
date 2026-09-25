@@ -4,7 +4,8 @@ import type { Classification, TaskState } from "../types.js";
 
 /**
  * One request, six questions. TypeSafe evaluates them in parallel against the
- * same state, so the five Nouls cost almost nothing on top of the Choice.
+ * same state, so the three Nouls cost almost nothing on top of the three
+ * Choices.
  *
  * The Choice options use the structured what/not_for/examples shape because the
  * boundaries that matter here are the confusable ones: debug vs implement,
@@ -73,22 +74,67 @@ const ROUTING_QUESTIONS = {
     true: "Touches migrations, production data, deletions, published releases or shared infrastructure",
     false: "Confined to a working copy and trivially corrected by trying again",
   }),
-  craft_is_main_difficulty: noul(
-    "The main difficulty is design judgment — naming, structure, a public interface others depend on — rather than mechanical edits.",
-  ),
-  is_bulk_mechanical: noul(
-    "The task is a repetitive edit applied across many files, with a known and uniform shape.",
-  ),
-  needs_write_access: noul("The worker must modify files to do this task.", {
-    true: "Edits, creates or deletes files",
-    false: "Reads, analyses or reports only",
-  }),
-  codex_is_better_fit: noul(
-    "An agent with configurable reasoning effort and a strict sandbox mode (codex) suits this " +
-      "task better than a general-purpose conversational agent (claude).",
+  // Merged replacement for the old craft_is_main_difficulty / is_bulk_mechanical
+  // pair: they were quasi-inverses of the same question, so one noul now reads
+  // both ends of that spectrum instead of paying for two calls.
+  solution_shape: noul(
+    "The task's difficulty is mechanical repetition rather than design judgment.",
     {
-      true: "Bulk mechanical work, effort calibratable via Luna/Terra/Sol, a strict sandbox is useful",
-      false: "Design judgment, nuance, conversational context — not just execution",
+      true: "A repetitive edit applied across many files, with a known and uniform shape",
+      false: "Naming, structure, a public interface others depend on — design judgment is the main difficulty",
+    },
+  ),
+  execution_scope: choice(
+    {
+      question: "What is the furthest-reaching effect this task's execution can have?",
+      focus: "The broadest effect if the worker does everything it's asked, not just the safest interpretation.",
+    },
+    {
+      read_only: {
+        what: "Reads, analyses or reports only — nothing changes",
+        not_for: "Any task that edits, creates or deletes a file",
+        examples: ["Where is the retry logic defined?", "Review the auth diff and report findings"],
+      },
+      local_write: {
+        what: "Edits files in the working copy, with no effect that reaches outside it",
+        not_for: "Deploys, published releases, migrations, or anything another system or person would see",
+        examples: ["Add a CSV export endpoint", "Fix the flaky auth test"],
+      },
+      external_effect: {
+        what: "Reaches outside the working copy: a deploy, a migration, a push, an external API call, shared infrastructure",
+        not_for: "Work confined to files in this repo and trivially corrected by trying again",
+        examples: ["Run the production migration", "Publish the release", "Push the fix and open the PR"],
+      },
+    },
+  ),
+  reasoning_demand: choice(
+    {
+      question: "What reasoning pattern must the worker use to complete this task correctly?",
+      focus:
+        "Judge uncertainty and branching in the solution path after the task is understood. Ignore " +
+        "blast radius, reversibility, number of files or systems, write access, vendor, and model tier.",
+    },
+    {
+      direct: {
+        what: "The target and execution path are explicit; the worker can retrieve or apply the result with almost no branching",
+        not_for: "Work whose next step depends on observations, tests, or choosing among plausible solutions",
+        examples: ["Find the definition of this symbol", "Apply this exact rename everywhere and run the specified checks"],
+      },
+      bounded: {
+        what: "The task needs a short chain of local reasoning or a small choice among clear alternatives, but the overall path is known",
+        not_for: "Purely mechanical execution, or open-ended investigation with repeated hypothesis testing",
+        examples: ["Implement this specified validation rule in one module", "Review a small diff against explicit acceptance criteria"],
+      },
+      iterative: {
+        what: "The worker must form and revise hypotheses or implementation choices from code inspection, tests, or tool feedback",
+        not_for: "A known sequence whose checks only confirm completion",
+        examples: ["Find the cause of a flaky test and fix it", "Adapt an implementation as integration failures reveal constraints"],
+      },
+      deep: {
+        what: "The worker must reconcile interacting constraints, compare non-obvious approaches, or reason through a long dependency chain for global correctness",
+        not_for: "Work that is merely broad, expensive to get wrong, or underspecified but follows a known recipe once clarified",
+        examples: ["Diagnose an intermittent consistency failure with several plausible interacting causes", "Design a compatibility strategy under conflicting API and data constraints"],
+      },
     },
   ),
 };
@@ -121,10 +167,11 @@ export async function classifyWithJev(
     useCaseProbabilities: answers.use_case.probabilities,
     spansMultipleSystems: answers.spans_multiple_systems.noul,
     hardToReverse: answers.hard_to_reverse.noul,
-    craftIsMainDifficulty: answers.craft_is_main_difficulty.noul,
-    isBulkMechanical: answers.is_bulk_mechanical.noul,
-    needsWriteAccess: answers.needs_write_access.noul,
-    vendorFit: answers.codex_is_better_fit.noul,
+    solutionShape: answers.solution_shape.noul,
+    executionScope: answers.execution_scope.choice,
+    reasoningDemand: answers.reasoning_demand.choice,
+    reasoningDemandConfidence: answers.reasoning_demand.confidence,
+    reasoningDemandProbabilities: answers.reasoning_demand.probabilities,
     backend: "jev",
     latencyMs,
   };

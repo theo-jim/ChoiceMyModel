@@ -34,6 +34,12 @@ export type Tier = "light" | "mid" | "frontier";
 /** codex -c model_reasoning_effort. Claude Code has no equivalent flag. */
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** How far the task's effects can reach, from confined to the working copy to touching something outside it. */
+export type ExecutionScope = "read_only" | "local_write" | "external_effect";
+
+/** The reasoning pattern the solution path itself demands, independent of blast radius or tier. */
+export type ReasoningDemand = "direct" | "bounded" | "iterative" | "deep";
+
 export interface TaskState {
   /** The task text that will be handed to the worker. */
   text: string;
@@ -51,14 +57,22 @@ export interface Classification {
   spansMultipleSystems: number;
   /** Probability that a wrong answer is costly or hard to undo, 0 to 1. */
   hardToReverse: number;
-  /** Probability that design judgment, not mechanical edits, is the main difficulty, 0 to 1. */
-  craftIsMainDifficulty: number;
-  /** Speculative: read on the chore and refactor branches. */
-  isBulkMechanical: number;
-  /** Probability the worker must modify files; drives the codex sandbox flag. */
-  needsWriteAccess: number;
-  /** Probability that codex (over claude) is the better-suited vendor for this task. */
-  vendorFit: number;
+  /**
+   * Merged replacement for the old craft-vs-bulk noul pair: 0 means design
+   * judgment (naming, structure, a public interface) is the main difficulty,
+   * 1 means the work is repetitive and mechanical. Read on all branches for
+   * the vendor pick's secondary rule; read on chore/refactor for the tier
+   * de-escalation.
+   */
+  solutionShape: number;
+  /** How far the task's effects reach; drives the sandbox/permission mode and, for external_effect, the tier. */
+  executionScope: ExecutionScope;
+  /** The reasoning pattern the solution path demands; drives codex's reasoning effort, independent of tier. */
+  reasoningDemand: ReasoningDemand;
+  /** Confidence in the reasoningDemand pick, 0 to 1. */
+  reasoningDemandConfidence: number;
+  /** Full distribution across reasoning demands. */
+  reasoningDemandProbabilities?: Record<string, number>;
   backend: "jev";
   latencyMs: number;
 }
@@ -70,6 +84,8 @@ export interface RoutingThresholds {
   minUseCaseConfidence: number;
   /** Per-class floors that override the global one, for classes whose mistakes are expensive. */
   useCaseConfidenceFloors?: Partial<Record<UseCase, number>>;
+  /** Below this reasoningDemand confidence, selectReasoningEffort bumps the effort up one step. */
+  reasoningDemandConfidence: number;
 }
 
 export interface WorkerChoice {
@@ -86,6 +102,19 @@ export interface RoutingDecision {
   classification: Classification;
   escalated: boolean;
   reasons: string[];
+  /**
+   * Why the codex reasoning effort was adjusted from its base mapping, if it
+   * was. Kept separate from `reasons` so effort adjustments can never be
+   * mistaken for a tier-escalation reason by code that reads that array.
+   */
+  effortReason?: string;
+  /**
+   * Set by chooseModel() when an auto-picked codex vendor had to fall back to
+   * claude because the Codex model couldn't be resolved (config missing or
+   * invalid). Kept separate from `reasons`/`effortReason` for the same
+   * reason: a different kind of adjustment, not a tier or effort decision.
+   */
+  vendorFallbackReason?: string;
 }
 
 export type RoutingTable = Record<UseCase, Tier>;

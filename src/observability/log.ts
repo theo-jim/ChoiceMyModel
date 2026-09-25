@@ -13,6 +13,8 @@ export interface LoggedDecision {
     worker: WorkerChoice;
     escalated: boolean;
     reasons: string[];
+    effortReason?: string;
+    vendorFallbackReason?: string;
   };
 }
 
@@ -61,6 +63,8 @@ export function logDecision(
       worker: routingDecision.worker,
       escalated: routingDecision.escalated,
       reasons: routingDecision.reasons,
+      effortReason: routingDecision.effortReason,
+      vendorFallbackReason: routingDecision.vendorFallbackReason,
     },
   };
 
