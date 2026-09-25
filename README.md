@@ -22,26 +22,33 @@ l'abstrait — il reconnaît une classe déjà évaluée.
         │
         ▼
   classify()  ──▶  POST api.typesafe.ai/v1/systemone   (model: jev-latest)
-        │           1 Choice : quelle classe de tâche ?  (lookup, review, debug, implement,
+        │           2 Choice : quelle classe de tâche ? (lookup, review, debug, implement,
         │                      refactor, test, docs, chore, other)
-        │           5 Noul   : 4+ systèmes ? difficile à annuler ? jugement de conception ?
-        │                      travail mécanique en masse ? besoin d'écrire des fichiers ?
-        │           (les 6 questions évaluées en parallèle dans le même appel)
+        │                      quel est l'effet le plus étendu de l'exécution ? (read_only,
+        │                      local_write, external_effect)
+        │           3 Noul   : 4+ systèmes ? difficile à annuler ? mécanique en masse ou
+        │                      jugement de conception ?
+        │           (les 5 questions évaluées en parallèle dans le même appel)
         ▼
-   route()    ──▶  classe → tier (light/mid/frontier), puis tier → modèle du roster choisi
+   route()    ──▶  classe → tier (light/mid/frontier), puis tier → sélecteur du roster choisi
         ▼
--k claude -a '--model claude-sonnet-5 --permission-mode acceptEdits'
+chooseModel() ──▶  côté codex seulement : résout le sélecteur en vrai id de modèle via
+        │           ~/.codex/config.toml (voir src/codexModel.ts)
+        ▼
+-k claude -a '--model sonnet --permission-mode acceptEdits'
 ```
 
 La table de routage parle en **tiers**, pas en noms de modèles : ce que les évals apprennent
 (« un lookup tient le score sur le tier light ») est une propriété de la classe de tâche, pas du
-vendeur. Chaque vendeur a son propre roster.
+vendeur. Chaque vendeur a son propre roster, mais aucun des deux n'y fige un id de modèle : côté
+claude ce sont des alias nus que le CLI résout lui-même, côté codex un suffixe de tier dont le
+préfixe de version est lu dans la config Codex à l'exécution (`chooseModel()`, jamais `route()`).
 
-| Tier | claude | codex |
-| --- | --- | --- |
-| light | `claude-haiku-4-5` | `gpt-5.6-luna` + `model_reasoning_effort=low` |
-| mid | `claude-sonnet-5` | `gpt-5.6-terra` + `model_reasoning_effort=high` |
-| frontier | `claude-opus-5` | `gpt-5.6-sol` + `model_reasoning_effort=xhigh` |
+| Tier | claude (`--model`) | codex (roster) | codex (résolu, exemple) |
+| --- | --- | --- | --- |
+| light | `haiku` | `luna` + `model_reasoning_effort=low` | `gpt-5.6-luna` |
+| mid | `sonnet` | `terra` + `model_reasoning_effort=high` | `gpt-5.6-terra` |
+| frontier | `opus` | `sol` + `model_reasoning_effort=xhigh` | `gpt-5.6-sol` |
 
 Les niveaux de reasoning codex suivent la recommandation de herd (Luna pour le mécanique, Terra
 pour le code ordinaire, Sol réservé aux problèmes vraiment durs). Claude Code n'a pas de flag
@@ -94,10 +101,10 @@ modèle sort de son jugement.
 
 | Tâche | Classe | Décision |
 | --- | --- | --- |
-| Review the auth diff | `review` | codex terra, **`--sandbox read-only`** (aucune écriture nécessaire) |
-| Fix the flaky auth test | `debug` | claude sonnet-5, `acceptEdits` |
+| Review the auth diff | `review` | codex terra, **`--sandbox read-only`** (`execution_scope: read_only`) |
+| Fix the flaky auth test | `debug` | claude sonnet, `acceptEdits` |
 | Rename `fetchUser` across the repo | `chore` | codex luna à `low` — mécanique en masse, on descend |
-| Migrate the payments schema and backfill | `implement` | claude opus-5 — *hard to reverse* + *spans 4+ systems* |
+| Migrate the payments schema and backfill | `implement` | claude opus — *hard to reverse* force le tier frontier |
 
 ## Les choix de conception qui viennent de la doc TypeSafe
 
@@ -105,15 +112,16 @@ modèle sort de son jugement.
   nom de question et par option : `answers.use_case.choice` est l'union littérale de mes propres
   classes, donc plus aucun narrowing à la main. Timeout, retries, `baseURL` et modèle par défaut
   viennent du SDK et de ses variables d'environnement.
-- **Une seule requête, sept questions**, évaluées en parallèle : les six Noul ne coûtent presque
-  rien de plus que le Choice.
-- **Speculative fan-out.** `is_bulk_mechanical` n'est lue que sur `chore` et `refactor`,
-  `needs_write_access` sert à choisir le sandbox codex. Poser d'avance une question qui ne servira
-  peut-être pas coûte moins cher qu'un second aller-retour.
-- **Le vendeur (claude vs codex) est aussi une décision de Jev, pas une entrée manuelle.**
-  `vendorFit` (le Noul `codex_is_better_fit`) dit si le travail est plutôt mécanique en masse avec
-  un raisonnement calibrable (codex) ou une affaire de jugement/nuance (claude). `--kind` /
-  `HERD_KIND` restent une échappatoire : s'ils sont fournis, ils priment toujours sur `vendorFit`.
+- **Une seule requête, cinq questions**, évaluées en parallèle : les trois Noul ne coûtent presque
+  rien de plus que les deux Choice.
+- **Un seul signal pour mécanique-en-masse vs jugement-de-conception.** `solution_shape` remplace
+  les deux anciens Noul quasi-inverses (`craft_is_main_difficulty` / `is_bulk_mechanical`) : lu sur
+  `chore`/`refactor` pour la désescalade, sur toutes les classes pour l'escalade côté conception.
+- **Le vendeur (claude vs codex) part d'une table par défaut, pas d'un Noul dédié.**
+  `DEFAULT_VENDOR_TABLE` fixe un vendeur par classe (claude par défaut, codex pour `chore`/`test`),
+  et `solution_shape` peut la retourner à ses extrêmes : fortement mécanique bascule vers codex même
+  si la table dit claude, fortement jugement de conception reste sur claude même si la table dit
+  codex. `--kind` / `HERD_KIND` restent une échappatoire : s'ils sont fournis, ils priment toujours.
 - **Des critères structurés** (`what` / `not_for` / `examples`) sur les options du Choice, pour les
   frontières qui se confondent : debug vs implement, refactor vs chore, review vs lookup.
 - **Les Noul renvoient une probabilité**, donc le seuil (0.7) est un curseur de tolérance au
@@ -123,10 +131,24 @@ modèle sort de son jugement.
 - **Le mécanique en masse descend d'un cran, mais jamais au détriment d'un signal de risque** — « en
   masse » *et* « difficile à annuler » est la combinaison la plus dangereuse, pas une raison
   d'économiser.
-- **Moindre privilège pour les deux vendeurs.** Une tâche que le classifieur juge sans écriture
-  (`needs_write_access` faible) obtient un worker en lecture seule : `--permission-mode plan` pour
-  claude (analyse seule, aucune édition), `--sandbox read-only` pour codex. Une tâche qui écrit
-  garde `acceptEdits` / `workspace-write`.
+- **Un risque critique force le tier frontier, il ne se contente pas d'escalader d'un cran.**
+  `hard_to_reverse` et `execution_scope: external_effect` sautent directement au tier frontier ;
+  les autres signaux (portée multi-systèmes, jugement de conception, confiance faible) escaladent
+  toujours d'un seul cran, même combinés entre eux — un OR de signaux faibles n'a jamais le même
+  effet qu'un seul signal fort.
+- **Moindre privilège pour les deux vendeurs, sur trois niveaux (`execution_scope`).**
+  `read_only` obtient un worker en lecture seule (`--permission-mode plan` pour claude,
+  `--sandbox read-only` pour codex). `local_write` obtient `acceptEdits` / `workspace-write`.
+  `external_effect` obtient aussi `acceptEdits` / `workspace-write`, mais contribue en plus au
+  risque critique ci-dessus : un effet qui sort de la copie de travail mérite le meilleur modèle,
+  pas seulement le bon mode d'écriture.
+- **Aucun id de modèle codex figé dans le code.** Le roster ne connaît que le suffixe de tier
+  (`luna`/`terra`/`sol`) ; `chooseModel()` lit `~/.codex/config.toml` pour en tirer le préfixe de
+  version au moment de l'appel (`src/codexModel.ts`). Config absente, illisible ou valeur hors
+  schéma : échec explicite avec un message actionnable, jamais un repli silencieux vers un id codé
+  en dur qui finirait par diverger de ce que Codex résout réellement. `route()` reste pur et
+  synchrone : seule cette résolution touche le système de fichiers, et uniquement depuis
+  `chooseModel()`.
 
 ## Ce qui a été volontairement écarté
 

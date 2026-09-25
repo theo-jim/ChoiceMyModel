@@ -34,6 +34,9 @@ export type Tier = "light" | "mid" | "frontier";
 /** codex -c model_reasoning_effort. Claude Code has no equivalent flag. */
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** How far the task's effects can reach, from confined to the working copy to touching something outside it. */
+export type ExecutionScope = "read_only" | "local_write" | "external_effect";
+
 export interface TaskState {
   /** The task text that will be handed to the worker. */
   text: string;
@@ -51,14 +54,16 @@ export interface Classification {
   spansMultipleSystems: number;
   /** Probability that a wrong answer is costly or hard to undo, 0 to 1. */
   hardToReverse: number;
-  /** Probability that design judgment, not mechanical edits, is the main difficulty, 0 to 1. */
-  craftIsMainDifficulty: number;
-  /** Speculative: read on the chore and refactor branches. */
-  isBulkMechanical: number;
-  /** Probability the worker must modify files; drives the codex sandbox flag. */
-  needsWriteAccess: number;
-  /** Probability that codex (over claude) is the better-suited vendor for this task. */
-  vendorFit: number;
+  /**
+   * Merged replacement for the old craft-vs-bulk noul pair: 0 means design
+   * judgment (naming, structure, a public interface) is the main difficulty,
+   * 1 means the work is repetitive and mechanical. Read on all branches for
+   * the vendor pick's secondary rule; read on chore/refactor for the tier
+   * de-escalation.
+   */
+  solutionShape: number;
+  /** How far the task's effects reach; drives the sandbox/permission mode and, for external_effect, the tier. */
+  executionScope: ExecutionScope;
   backend: "jev";
   latencyMs: number;
 }

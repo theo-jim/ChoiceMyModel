@@ -17,10 +17,8 @@ function fakeDecision(): RoutingDecision {
       useCaseProbabilities: { implement: 0.9, other: 0.1 },
       spansMultipleSystems: 0.1,
       hardToReverse: 0.2,
-      craftIsMainDifficulty: 0.3,
-      isBulkMechanical: 0,
-      needsWriteAccess: 0.9,
-      vendorFit: 0.1,
+      solutionShape: 0.5,
+      executionScope: "local_write",
       backend: "jev",
       latencyMs: 12,
     },
@@ -91,4 +89,20 @@ test("chooseModel records every completed routing decision", async () => {
   assert.equal(decision.tier, "mid");
   assert.equal(decision.worker.kind, "claude");
   assert.equal(logged, true);
+});
+
+test("chooseModel resolves the real codex model id before returning", async () => {
+  const decision = await chooseModel(
+    { text: "Bump every dependency" },
+    { kind: "codex" },
+    {
+      classify: async () => fakeDecision().classification,
+      log: () => {},
+      resolveCodexModel: async (tier) => `gpt-9.9-${tier === "mid" ? "terra" : "other"}`,
+    },
+  );
+
+  assert.equal(decision.worker.kind, "codex");
+  assert.equal(decision.worker.model, "gpt-9.9-terra");
+  assert.match(decision.worker.args, /^-m gpt-9\.9-terra /);
 });

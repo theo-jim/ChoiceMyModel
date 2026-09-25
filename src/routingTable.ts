@@ -1,6 +1,7 @@
 import type {
   AgentKind,
   Classification,
+  ExecutionScope,
   ReasoningEffort,
   RoutingDecision,
   RoutingTable,
@@ -11,6 +12,12 @@ import type {
 } from "./types.js";
 
 interface RosterEntry {
+  /**
+   * For claude: a bare --model alias ("haiku"/"sonnet"/"opus") the claude CLI
+   * resolves itself. For codex: the tier suffix ("luna"/"terra"/"sol"); the
+   * version prefix in front of it is resolved at runtime by
+   * resolveCodexModel() (see codexModel.ts), never hardcoded here.
+   */
   model: string;
   effort?: ReasoningEffort;
 }
@@ -26,14 +33,14 @@ interface RosterEntry {
  */
 export const ROSTERS: Record<AgentKind, Record<Tier, RosterEntry>> = {
   claude: {
-    light: { model: "claude-haiku-4-5" },
-    mid: { model: "claude-sonnet-5" },
-    frontier: { model: "claude-opus-5" },
+    light: { model: "haiku" },
+    mid: { model: "sonnet" },
+    frontier: { model: "opus" },
   },
   codex: {
-    light: { model: "gpt-5.6-luna", effort: "low" },
-    mid: { model: "gpt-5.6-terra", effort: "high" },
-    frontier: { model: "gpt-5.6-sol", effort: "xhigh" },
+    light: { model: "luna", effort: "low" },
+    mid: { model: "terra", effort: "high" },
+    frontier: { model: "sol", effort: "xhigh" },
   },
 };
 
@@ -80,24 +87,62 @@ function deescalate(tier: Tier): Tier {
   return TIER_ORDER[Math.max(TIER_ORDER.indexOf(tier) - 1, 0)];
 }
 
-/** Vendor pick when the caller has no opinion: Jev's vendorFit noul against the same yes/no bar as every other risk signal. */
+/**
+ * Vendor pick when the caller has no opinion. A simple, documented default per
+ * use case, adjustable once evals against real traffic say otherwise: most
+ * classes default to claude, chore and test to codex.
+ */
+export const DEFAULT_VENDOR_TABLE: Record<UseCase, AgentKind> = {
+  lookup: "claude",
+  review: "claude",
+  debug: "claude",
+  implement: "claude",
+  refactor: "claude",
+  docs: "claude",
+  other: "claude",
+  chore: "codex",
+  test: "codex",
+};
+
+/**
+ * Vendor pick when the caller has no opinion: the default table, overridden by
+ * the merged solutionShape signal only at its strong ends — a bulk/mechanical
+ * task moves to codex even if its class defaults to claude, and a task where
+ * design judgment dominates stays on claude even if its class defaults to
+ * codex. options.kind (checked by the caller) always wins over both.
+ */
 function pickVendor(classification: Classification, thresholds: RoutingThresholds): AgentKind {
-  return classification.vendorFit >= thresholds.noul ? "codex" : "claude";
+  const tableVendor = DEFAULT_VENDOR_TABLE[classification.useCase] ?? "claude";
+  const isBulkMechanical = classification.solutionShape >= thresholds.noul;
+  const isCraftDominant = classification.solutionShape <= 1 - thresholds.noul;
+
+  if (tableVendor === "claude" && isBulkMechanical) return "codex";
+  if (tableVendor === "codex" && isCraftDominant) return "claude";
+  return tableVendor;
 }
 
 /**
  * Renders herd-spawn's -a value. For claude the permission flag has to be
  * re-included because passing -a replaces herd's default entirely.
  *
- * Least privilege applies to both vendors: a task the classifier says needs no
- * writes gets a read-only worker. For claude that is herd's `plan` permission
- * mode (analyse only, no edits); for codex it is the `read-only` sandbox.
+ * Least privilege applies to both vendors: a read-only task gets a read-only
+ * worker (claude's `plan` permission mode, codex's `read-only` sandbox); any
+ * write, local or external, needs the write-capable mode.
+ *
+ * codexModel, when given, overrides the roster's tier suffix with an already
+ * resolved model id (see chooseModel()); route() itself never passes it, so
+ * this stays synchronous and filesystem-free.
  */
-export function renderWorker(kind: AgentKind, tier: Tier, needsWrite: boolean): WorkerChoice {
+export function renderWorker(
+  kind: AgentKind,
+  tier: Tier,
+  executionScope: ExecutionScope,
+  codexModel?: string,
+): WorkerChoice {
   const entry = ROSTERS[kind][tier];
 
   if (kind === "claude") {
-    const permissionMode = needsWrite ? "acceptEdits" : "plan";
+    const permissionMode = executionScope === "read_only" ? "plan" : "acceptEdits";
     return {
       kind,
       model: entry.model,
@@ -105,12 +150,13 @@ export function renderWorker(kind: AgentKind, tier: Tier, needsWrite: boolean): 
     };
   }
 
-  const sandbox = needsWrite ? "workspace-write" : "read-only";
+  const sandbox = executionScope === "read_only" ? "read-only" : "workspace-write";
+  const model = codexModel ?? entry.model;
   return {
     kind,
-    model: entry.model,
+    model,
     effort: entry.effort,
-    args: `-m ${entry.model} -c model_reasoning_effort=${entry.effort} --sandbox ${sandbox}`,
+    args: `-m ${model} -c model_reasoning_effort=${entry.effort} --sandbox ${sandbox}`,
   };
 }
 
@@ -132,14 +178,16 @@ export function route(classification: Classification, options: RouteOptions = {}
   const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
   const kind = options.kind ?? pickVendor(classification, thresholds);
 
-  const { useCase } = classification;
+  const { useCase, executionScope } = classification;
   const baseTier = table[useCase] ?? "mid";
   const isYes = (noul: number) => noul >= thresholds.noul;
+  const isNo = (noul: number) => noul <= 1 - thresholds.noul;
 
   const reasons: string[] = [];
   if (isYes(classification.hardToReverse)) reasons.push("hard to reverse if wrong");
+  if (executionScope === "external_effect") reasons.push("has an effect outside the working copy");
   if (isYes(classification.spansMultipleSystems)) reasons.push("spans 4+ systems");
-  if (isYes(classification.craftIsMainDifficulty)) reasons.push("design judgment is the main difficulty");
+  if (isNo(classification.solutionShape)) reasons.push("design judgment is the main difficulty");
 
   const confidenceFloor =
     thresholds.useCaseConfidenceFloors?.[useCase] ?? thresholds.minUseCaseConfidence;
@@ -151,10 +199,19 @@ export function route(classification: Classification, options: RouteOptions = {}
   // once nothing risky has fired: bulk AND hard-to-reverse is the most
   // dangerous combination, not a reason to go cheaper.
   const bulkMechanical =
-    (useCase === "chore" || useCase === "refactor") && isYes(classification.isBulkMechanical);
+    (useCase === "chore" || useCase === "refactor") && isYes(classification.solutionShape);
+
+  // hard_to_reverse and an external_effect scope are critical risk: they jump
+  // straight to the frontier tier instead of a one-tier escalate, so a single
+  // strong risk signal isn't watered down to the same effect as an escalate
+  // that several weaker signals would also trigger. Weaker signals above still
+  // only ever escalate by one tier, however many of them fire together.
+  const criticalRisk = isYes(classification.hardToReverse) || executionScope === "external_effect";
 
   let tier = baseTier;
-  if (reasons.length > 0) {
+  if (criticalRisk) {
+    tier = "frontier";
+  } else if (reasons.length > 0) {
     tier = escalate(baseTier);
   } else if (bulkMechanical) {
     tier = deescalate(baseTier);
@@ -163,7 +220,7 @@ export function route(classification: Classification, options: RouteOptions = {}
 
   return {
     tier,
-    worker: renderWorker(kind, tier, isYes(classification.needsWriteAccess)),
+    worker: renderWorker(kind, tier, executionScope),
     classification,
     escalated: TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(baseTier),
     reasons,

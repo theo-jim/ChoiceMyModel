@@ -9,10 +9,8 @@ function classification(overrides: Partial<Classification> = {}): Classification
     useCaseConfidence: 0.9,
     spansMultipleSystems: 0,
     hardToReverse: 0,
-    craftIsMainDifficulty: 0,
-    isBulkMechanical: 0,
-    needsWriteAccess: 0,
-    vendorFit: 0,
+    solutionShape: 0.5,
+    executionScope: "read_only",
     backend: "jev",
     latencyMs: 100,
     ...overrides,
@@ -27,7 +25,7 @@ test("routes a plain lookup to the light tier", () => {
   assert.deepEqual(decision.reasons, []);
 });
 
-test("escalates one tier when the task is hard to reverse", () => {
+test("escalates straight to frontier when the task is hard to reverse", () => {
   const decision = route(classification({ useCase: "implement", hardToReverse: 0.92 }));
   assert.equal(decision.tier, "frontier");
   assert.equal(decision.escalated, true);
@@ -40,77 +38,97 @@ test("a noul below the threshold does not escalate", () => {
   assert.equal(decision.escalated, false);
 });
 
+test("an external_effect scope forces the frontier tier", () => {
+  const decision = route(classification({ useCase: "implement", executionScope: "external_effect" }));
+  assert.equal(decision.tier, "frontier");
+  assert.equal(decision.escalated, true);
+  assert.deepEqual(decision.reasons, ["has an effect outside the working copy"]);
+});
+
+test("a local_write scope alone does not escalate the tier", () => {
+  const decision = route(classification({ useCase: "implement", executionScope: "local_write" }));
+  assert.equal(decision.tier, "mid");
+  assert.deepEqual(decision.reasons, []);
+});
+
 test("renders claude args with the permission flag re-included", () => {
-  const decision = route(classification({ useCase: "implement", needsWriteAccess: 0.95 }), {
+  const decision = route(classification({ useCase: "implement", executionScope: "local_write" }), {
     kind: "claude",
   });
   assert.equal(decision.worker.kind, "claude");
-  assert.equal(decision.worker.args, "--model claude-sonnet-5 --permission-mode acceptEdits");
+  assert.equal(decision.worker.args, "--model sonnet --permission-mode acceptEdits");
   assert.equal(decision.worker.effort, undefined);
 });
 
-test("a claude worker that writes nothing gets plan (read-only) mode", () => {
-  const decision = route(classification({ useCase: "review", needsWriteAccess: 0.05 }), {
+test("a claude worker with a read-only scope gets plan (read-only) mode", () => {
+  const decision = route(classification({ useCase: "review", executionScope: "read_only" }), {
     kind: "claude",
   });
-  assert.equal(decision.worker.args, "--model claude-sonnet-5 --permission-mode plan");
+  assert.equal(decision.worker.args, "--model sonnet --permission-mode plan");
 });
 
-test("renders codex args with model, reasoning effort and a write sandbox", () => {
-  const decision = route(classification({ useCase: "implement", needsWriteAccess: 0.95 }), {
+test("renders codex args with the roster's tier suffix, reasoning effort and a write sandbox", () => {
+  const decision = route(classification({ useCase: "implement", executionScope: "local_write" }), {
     kind: "codex",
   });
   assert.equal(decision.worker.kind, "codex");
   assert.equal(decision.worker.effort, "high");
-  assert.equal(
-    decision.worker.args,
-    "-m gpt-5.6-terra -c model_reasoning_effort=high --sandbox workspace-write",
-  );
+  assert.equal(decision.worker.args, "-m terra -c model_reasoning_effort=high --sandbox workspace-write");
 });
 
-test("a codex worker that writes nothing gets a read-only sandbox", () => {
-  const decision = route(classification({ useCase: "review", needsWriteAccess: 0.05 }), {
+test("a codex worker with a read-only scope gets a read-only sandbox", () => {
+  const decision = route(classification({ useCase: "review", executionScope: "read_only" }), {
     kind: "codex",
   });
   assert.match(decision.worker.args, /--sandbox read-only/);
 });
 
-test("with no explicit kind, a high vendorFit picks codex", () => {
-  const decision = route(classification({ useCase: "chore", vendorFit: 0.9 }));
+test("with no explicit kind, a class that defaults to claude switches to codex when bulk mechanical", () => {
+  const decision = route(classification({ useCase: "implement", solutionShape: 0.9 }));
   assert.equal(decision.worker.kind, "codex");
 });
 
-test("with no explicit kind, a low vendorFit picks claude", () => {
-  const decision = route(classification({ useCase: "implement", vendorFit: 0.1 }));
+test("with no explicit kind, a class that defaults to claude stays on claude otherwise", () => {
+  const decision = route(classification({ useCase: "implement", solutionShape: 0.5 }));
   assert.equal(decision.worker.kind, "claude");
 });
 
-test("vendorFit exactly at the noul threshold picks codex", () => {
-  const decision = route(classification({ useCase: "chore", vendorFit: 0.7 }));
+test("with no explicit kind, a class that defaults to codex switches to claude when craft-dominant", () => {
+  const decision = route(classification({ useCase: "chore", solutionShape: 0.1 }));
+  assert.equal(decision.worker.kind, "claude");
+});
+
+test("with no explicit kind, a class that defaults to codex stays on codex otherwise", () => {
+  const decision = route(classification({ useCase: "chore", solutionShape: 0.5 }));
   assert.equal(decision.worker.kind, "codex");
 });
 
-test("an explicit kind overrides vendorFit even when Jev would have picked the other vendor", () => {
-  const decision = route(classification({ useCase: "chore", vendorFit: 0.95 }), { kind: "claude" });
+test("solutionShape exactly at the noul threshold switches the default claude class to codex", () => {
+  const decision = route(classification({ useCase: "implement", solutionShape: 0.7 }));
+  assert.equal(decision.worker.kind, "codex");
+});
+
+test("an explicit kind overrides the vendor pick even when solutionShape would have picked the other vendor", () => {
+  const decision = route(classification({ useCase: "chore", solutionShape: 0.9 }), { kind: "claude" });
   assert.equal(decision.worker.kind, "claude");
 });
 
 test("bulk mechanical work drops a tier", () => {
-  const decision = route(classification({ useCase: "refactor", isBulkMechanical: 0.9 }));
+  const decision = route(classification({ useCase: "refactor", solutionShape: 0.9 }));
   assert.equal(decision.tier, "light");
   assert.equal(decision.escalated, false);
   assert.deepEqual(decision.reasons, ["bulk mechanical work, dropped a tier"]);
 });
 
 test("a class already on the light tier reports no drop", () => {
-  const decision = route(classification({ useCase: "chore", isBulkMechanical: 0.9 }));
+  const decision = route(classification({ useCase: "chore", solutionShape: 0.9 }));
   assert.equal(decision.tier, "light");
   assert.deepEqual(decision.reasons, []);
 });
 
 test("bulk mechanical never suppresses a risk signal", () => {
   const decision = route(
-    classification({ useCase: "refactor", isBulkMechanical: 0.95, hardToReverse: 0.9 }),
+    classification({ useCase: "refactor", solutionShape: 0.95, hardToReverse: 0.9 }),
   );
   assert.equal(decision.tier, "frontier");
   assert.equal(decision.escalated, true);
@@ -159,7 +177,7 @@ test("never escalates past the frontier tier", () => {
       useCase: "implement",
       hardToReverse: 0.9,
       spansMultipleSystems: 0.9,
-      craftIsMainDifficulty: 0.9,
+      solutionShape: 0.1,
     }),
   );
   assert.equal(decision.tier, "frontier");
