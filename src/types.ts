@@ -37,6 +37,9 @@ export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "ma
 /** How far the task's effects can reach, from confined to the working copy to touching something outside it. */
 export type ExecutionScope = "read_only" | "local_write" | "external_effect";
 
+/** The reasoning pattern the solution path itself demands, independent of blast radius or tier. */
+export type ReasoningDemand = "direct" | "bounded" | "iterative" | "deep";
+
 export interface TaskState {
   /** The task text that will be handed to the worker. */
   text: string;
@@ -64,6 +67,12 @@ export interface Classification {
   solutionShape: number;
   /** How far the task's effects reach; drives the sandbox/permission mode and, for external_effect, the tier. */
   executionScope: ExecutionScope;
+  /** The reasoning pattern the solution path demands; drives codex's reasoning effort, independent of tier. */
+  reasoningDemand: ReasoningDemand;
+  /** Confidence in the reasoningDemand pick, 0 to 1. */
+  reasoningDemandConfidence: number;
+  /** Full distribution across reasoning demands. */
+  reasoningDemandProbabilities?: Record<string, number>;
   backend: "jev";
   latencyMs: number;
 }
@@ -75,6 +84,8 @@ export interface RoutingThresholds {
   minUseCaseConfidence: number;
   /** Per-class floors that override the global one, for classes whose mistakes are expensive. */
   useCaseConfidenceFloors?: Partial<Record<UseCase, number>>;
+  /** Below this reasoningDemand confidence, selectReasoningEffort bumps the effort up one step. */
+  reasoningDemandConfidence: number;
 }
 
 export interface WorkerChoice {
@@ -91,6 +102,12 @@ export interface RoutingDecision {
   classification: Classification;
   escalated: boolean;
   reasons: string[];
+  /**
+   * Why the codex reasoning effort was adjusted from its base mapping, if it
+   * was. Kept separate from `reasons` so effort adjustments can never be
+   * mistaken for a tier-escalation reason by code that reads that array.
+   */
+  effortReason?: string;
 }
 
 export type RoutingTable = Record<UseCase, Tier>;

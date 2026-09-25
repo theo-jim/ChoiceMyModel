@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_THRESHOLDS, ROSTERS, route } from "../src/routingTable.js";
+import { DEFAULT_THRESHOLDS, ROSTERS, route, selectReasoningEffort } from "../src/routingTable.js";
 import type { Classification } from "../src/types.js";
 
 function classification(overrides: Partial<Classification> = {}): Classification {
@@ -11,6 +11,8 @@ function classification(overrides: Partial<Classification> = {}): Classification
     hardToReverse: 0,
     solutionShape: 0.5,
     executionScope: "read_only",
+    reasoningDemand: "bounded",
+    reasoningDemandConfidence: 0.9,
     backend: "jev",
     latencyMs: 100,
     ...overrides,
@@ -68,9 +70,15 @@ test("a claude worker with a read-only scope gets plan (read-only) mode", () => 
 });
 
 test("renders codex args with the roster's tier suffix, reasoning effort and a write sandbox", () => {
-  const decision = route(classification({ useCase: "implement", executionScope: "local_write" }), {
-    kind: "codex",
-  });
+  const decision = route(
+    classification({
+      useCase: "implement",
+      executionScope: "local_write",
+      reasoningDemand: "iterative",
+      reasoningDemandConfidence: 0.9,
+    }),
+    { kind: "codex" },
+  );
   assert.equal(decision.worker.kind, "codex");
   assert.equal(decision.worker.effort, "high");
   assert.equal(decision.worker.args, "-m terra -c model_reasoning_effort=high --sandbox workspace-write");
@@ -182,4 +190,108 @@ test("never escalates past the frontier tier", () => {
   );
   assert.equal(decision.tier, "frontier");
   assert.equal(decision.reasons.length, 3);
+});
+
+test("selectReasoningEffort maps each reasoning demand to its base effort", () => {
+  const cases: Array<[Classification["reasoningDemand"], string]> = [
+    ["direct", "low"],
+    ["bounded", "medium"],
+    ["iterative", "high"],
+    ["deep", "xhigh"],
+  ];
+  for (const [reasoningDemand, expected] of cases) {
+    const selection = selectReasoningEffort(
+      classification({ reasoningDemand, reasoningDemandConfidence: 0.9 }),
+      DEFAULT_THRESHOLDS,
+    );
+    assert.equal(selection.effort, expected, `${reasoningDemand} -> ${expected}`);
+    assert.equal(selection.reason, undefined);
+  }
+});
+
+test("selectReasoningEffort bumps effort up one step when reasoning demand confidence is low", () => {
+  const selection = selectReasoningEffort(
+    classification({ reasoningDemand: "bounded", reasoningDemandConfidence: 0.4 }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(selection.effort, "high");
+  assert.match(selection.reason ?? "", /low confidence on reasoning demand/);
+});
+
+test("selectReasoningEffort caps the confidence bump at xhigh", () => {
+  const selection = selectReasoningEffort(
+    classification({ reasoningDemand: "deep", reasoningDemandConfidence: 0.1 }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(selection.effort, "xhigh");
+});
+
+test("selectReasoningEffort floors effort at medium when the use case itself is uncertain", () => {
+  const selection = selectReasoningEffort(
+    classification({
+      useCase: "implement",
+      useCaseConfidence: 0.5, // below implement's 0.75 floor
+      reasoningDemand: "direct",
+      reasoningDemandConfidence: 0.95,
+    }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(selection.effort, "medium");
+  assert.match(selection.reason ?? "", /classifier unsure which task class this is/);
+});
+
+test("selectReasoningEffort never returns none or max", () => {
+  for (const reasoningDemand of ["direct", "bounded", "iterative", "deep"] as const) {
+    const selection = selectReasoningEffort(
+      classification({ reasoningDemand, reasoningDemandConfidence: 0.1, useCaseConfidence: 0.1 }),
+      DEFAULT_THRESHOLDS,
+    );
+    assert.notEqual(selection.effort, "none");
+    assert.notEqual(selection.effort, "max");
+  }
+});
+
+test("route() never sets an effort for a claude worker", () => {
+  const decision = route(classification(), { kind: "claude" });
+  assert.equal(decision.worker.effort, undefined);
+  assert.equal(decision.effortReason, undefined);
+});
+
+test("route() throws when an explicit effort is given for a claude worker", () => {
+  assert.throws(
+    () => route(classification(), { kind: "claude", effort: "high" }),
+    /RouteOptions\.effort only applies to codex/,
+  );
+});
+
+test("route() throws when the vendor auto-pick resolves to claude with an explicit effort", () => {
+  // useCase "implement" defaults to claude in DEFAULT_VENDOR_TABLE, with no kind override.
+  assert.throws(
+    () => route(classification({ useCase: "implement" }), { effort: "high" }),
+    /RouteOptions\.effort only applies to codex/,
+  );
+});
+
+test("route() lets an explicit effort override the automatic codex selection", () => {
+  const decision = route(classification({ reasoningDemand: "direct", reasoningDemandConfidence: 0.9 }), {
+    kind: "codex",
+    effort: "max",
+  });
+  assert.equal(decision.worker.effort, "max");
+  assert.equal(decision.effortReason, undefined);
+});
+
+test("route() picks the same codex effort for the same reasoning demand regardless of tier", () => {
+  const light = route(
+    classification({ useCase: "lookup", reasoningDemand: "iterative", reasoningDemandConfidence: 0.9 }),
+    { kind: "codex" },
+  );
+  const mid = route(
+    classification({ useCase: "debug", reasoningDemand: "iterative", reasoningDemandConfidence: 0.9 }),
+    { kind: "codex" },
+  );
+  assert.equal(light.tier, "light");
+  assert.equal(mid.tier, "mid");
+  assert.equal(light.worker.effort, "high");
+  assert.equal(mid.worker.effort, "high");
 });

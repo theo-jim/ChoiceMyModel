@@ -44,6 +44,12 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
             confidence: 0.88,
             probabilities: { read_only: 0.02, local_write: 0.88, external_effect: 0.1 },
           },
+          reasoning_demand: {
+            type: "choice",
+            choice: "iterative",
+            confidence: 0.71,
+            probabilities: { direct: 0.02, bounded: 0.12, iterative: 0.71, deep: 0.15 },
+          },
         },
         model: "jev-latest",
         usage: { input_tokens: 10, output_tokens: 5 },
@@ -63,6 +69,14 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.equal(result.hardToReverse, 0.2);
   assert.equal(result.solutionShape, 0.3);
   assert.equal(result.executionScope, "local_write");
+  assert.equal(result.reasoningDemand, "iterative");
+  assert.equal(result.reasoningDemandConfidence, 0.71);
+  assert.deepEqual(result.reasoningDemandProbabilities, {
+    direct: 0.02,
+    bounded: 0.12,
+    iterative: 0.71,
+    deep: 0.15,
+  });
   assert.ok(result.latencyMs >= 0);
 
   // The request actually carried the task state and the routing questions.
@@ -73,4 +87,5 @@ test("jev classifier maps a systemOne answer set onto a Classification", async (
   assert.ok("use_case" in body.questions);
   assert.ok("solution_shape" in body.questions);
   assert.ok("execution_scope" in body.questions);
+  assert.ok("reasoning_demand" in body.questions);
 });

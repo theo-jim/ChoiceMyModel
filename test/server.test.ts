@@ -22,6 +22,8 @@ function fakeDecision(): RoutingDecision {
       hardToReverse: 0,
       solutionShape: 0.5,
       executionScope: "local_write",
+      reasoningDemand: "bounded",
+      reasoningDemandConfidence: 0.9,
       backend: "jev",
       latencyMs: 1,
     },

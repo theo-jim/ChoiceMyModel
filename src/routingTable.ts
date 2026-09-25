@@ -2,6 +2,7 @@ import type {
   AgentKind,
   Classification,
   ExecutionScope,
+  ReasoningDemand,
   ReasoningEffort,
   RoutingDecision,
   RoutingTable,
@@ -19,17 +20,14 @@ interface RosterEntry {
    * resolveCodexModel() (see codexModel.ts), never hardcoded here.
    */
   model: string;
-  effort?: ReasoningEffort;
 }
 
 /**
  * One roster per agent kind, so the routing table stays vendor-independent:
  * what the evals teach you ("a lookup holds its score on the light tier") is a
- * fact about the task class, not about a vendor.
- *
- * Codex effort levels follow herd's own guidance: Luna at low for bulk
- * mechanical work, Terra at high for ordinary coding, Sol at xhigh reserved for
- * genuinely hard problems. Claude Code has no reasoning-effort flag.
+ * fact about the task class, not about a vendor. The roster only picks the
+ * model; codex's reasoning effort is a separate decision (selectReasoningEffort
+ * below), decoupled from tier on purpose.
  */
 export const ROSTERS: Record<AgentKind, Record<Tier, RosterEntry>> = {
   claude: {
@@ -38,9 +36,9 @@ export const ROSTERS: Record<AgentKind, Record<Tier, RosterEntry>> = {
     frontier: { model: "opus" },
   },
   codex: {
-    light: { model: "luna", effort: "low" },
-    mid: { model: "terra", effort: "high" },
-    frontier: { model: "sol", effort: "xhigh" },
+    light: { model: "luna" },
+    mid: { model: "terra" },
+    frontier: { model: "sol" },
   },
 };
 
@@ -76,6 +74,7 @@ export const DEFAULT_THRESHOLDS: RoutingThresholds = {
     debug: 0.6,
     refactor: 0.6,
   },
+  reasoningDemandConfidence: 0.6,
 };
 
 function escalate(tier: Tier): Tier {
@@ -121,6 +120,62 @@ function pickVendor(classification: Classification, thresholds: RoutingThreshold
   return tableVendor;
 }
 
+/** Base mapping from the reasoning pattern a task demands to codex's reasoning effort, independent of tier. */
+const REASONING_EFFORT_BASE: Record<ReasoningDemand, ReasoningEffort> = {
+  direct: "low",
+  bounded: "medium",
+  iterative: "high",
+  deep: "xhigh",
+};
+
+/** Automatic selection only ever moves within this range; "none" and "max" require an explicit RouteOptions.effort override. */
+const EFFORT_ESCALATION_ORDER: ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
+
+function bumpEffort(effort: ReasoningEffort): ReasoningEffort {
+  const i = EFFORT_ESCALATION_ORDER.indexOf(effort);
+  return EFFORT_ESCALATION_ORDER[Math.min(i + 1, EFFORT_ESCALATION_ORDER.length - 1)];
+}
+
+export interface EffortSelection {
+  effort: ReasoningEffort;
+  /** Set only when a guard rail moved the effort away from the base mapping. */
+  reason?: string;
+}
+
+/**
+ * Picks codex's reasoning effort from the task's reasoning demand alone — NOT
+ * from the tier, so the same reasoningDemand always yields the same effort
+ * regardless of which tier the task landed on.
+ *
+ * Two guard rails can raise (never lower) the base mapping:
+ * - low confidence on reasoningDemand itself bumps the effort up one step;
+ * - a use case the classifier is unsure about (the same floor route() checks)
+ *   never gets "low" effort, since a wrong class guess makes "direct" an
+ *   unreliable read. This floor is re-derived here rather than passed in, so
+ *   this function keeps its two-argument, independently testable signature.
+ */
+export function selectReasoningEffort(
+  classification: Classification,
+  thresholds: RoutingThresholds,
+): EffortSelection {
+  let effort = REASONING_EFFORT_BASE[classification.reasoningDemand];
+  let reason: string | undefined;
+
+  if (classification.reasoningDemandConfidence < thresholds.reasoningDemandConfidence) {
+    effort = bumpEffort(effort);
+    reason = "low confidence on reasoning demand, effort raised one step";
+  }
+
+  const confidenceFloor =
+    thresholds.useCaseConfidenceFloors?.[classification.useCase] ?? thresholds.minUseCaseConfidence;
+  if (classification.useCaseConfidence < confidenceFloor && effort === "low") {
+    effort = "medium";
+    reason = "classifier unsure which task class this is, effort floored at medium";
+  }
+
+  return { effort, reason };
+}
+
 /**
  * Renders herd-spawn's -a value. For claude the permission flag has to be
  * re-included because passing -a replaces herd's default entirely.
@@ -131,12 +186,15 @@ function pickVendor(classification: Classification, thresholds: RoutingThreshold
  *
  * codexModel, when given, overrides the roster's tier suffix with an already
  * resolved model id (see chooseModel()); route() itself never passes it, so
- * this stays synchronous and filesystem-free.
+ * this stays synchronous and filesystem-free. Codex callers must supply
+ * effort — route() always does, having just computed it via
+ * selectReasoningEffort() or taken it from options.effort.
  */
 export function renderWorker(
   kind: AgentKind,
   tier: Tier,
   executionScope: ExecutionScope,
+  effort?: ReasoningEffort,
   codexModel?: string,
 ): WorkerChoice {
   const entry = ROSTERS[kind][tier];
@@ -155,8 +213,8 @@ export function renderWorker(
   return {
     kind,
     model,
-    effort: entry.effort,
-    args: `-m ${model} -c model_reasoning_effort=${entry.effort} --sandbox ${sandbox}`,
+    effort,
+    args: `-m ${model} -c model_reasoning_effort=${effort} --sandbox ${sandbox}`,
   };
 }
 
@@ -164,6 +222,8 @@ export interface RouteOptions {
   kind?: AgentKind;
   table?: RoutingTable;
   thresholds?: RoutingThresholds;
+  /** Overrides the automatic codex reasoning effort. Only valid when the resolved kind is "codex". */
+  effort?: ReasoningEffort;
 }
 
 /**
@@ -177,6 +237,12 @@ export function route(classification: Classification, options: RouteOptions = {}
   const table = options.table ?? DEFAULT_ROUTING_TABLE;
   const thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
   const kind = options.kind ?? pickVendor(classification, thresholds);
+
+  if (kind === "claude" && options.effort !== undefined) {
+    throw new Error(
+      'RouteOptions.effort only applies to codex; the resolved kind here is "claude", so it would be silently ignored.',
+    );
+  }
 
   const { useCase, executionScope } = classification;
   const baseTier = table[useCase] ?? "mid";
@@ -218,12 +284,25 @@ export function route(classification: Classification, options: RouteOptions = {}
     if (tier !== baseTier) reasons.push("bulk mechanical work, dropped a tier");
   }
 
+  let effort: ReasoningEffort | undefined;
+  let effortReason: string | undefined;
+  if (kind === "codex") {
+    if (options.effort !== undefined) {
+      effort = options.effort;
+    } else {
+      const selection = selectReasoningEffort(classification, thresholds);
+      effort = selection.effort;
+      effortReason = selection.reason;
+    }
+  }
+
   return {
     tier,
-    worker: renderWorker(kind, tier, executionScope),
+    worker: renderWorker(kind, tier, executionScope, effort),
     classification,
     escalated: TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(baseTier),
     reasons,
+    effortReason,
   };
 }
 

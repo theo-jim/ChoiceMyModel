@@ -3,8 +3,9 @@ import { typeSafeClient } from "../typesafe.js";
 import type { Classification, TaskState } from "../types.js";
 
 /**
- * One request, five questions. TypeSafe evaluates them in parallel against the
- * same state, so the three Nouls cost almost nothing on top of the two Choices.
+ * One request, six questions. TypeSafe evaluates them in parallel against the
+ * same state, so the three Nouls cost almost nothing on top of the three
+ * Choices.
  *
  * The Choice options use the structured what/not_for/examples shape because the
  * boundaries that matter here are the confusable ones: debug vs implement,
@@ -106,6 +107,36 @@ const ROUTING_QUESTIONS = {
       },
     },
   ),
+  reasoning_demand: choice(
+    {
+      question: "What reasoning pattern must the worker use to complete this task correctly?",
+      focus:
+        "Judge uncertainty and branching in the solution path after the task is understood. Ignore " +
+        "blast radius, reversibility, number of files or systems, write access, vendor, and model tier.",
+    },
+    {
+      direct: {
+        what: "The target and execution path are explicit; the worker can retrieve or apply the result with almost no branching",
+        not_for: "Work whose next step depends on observations, tests, or choosing among plausible solutions",
+        examples: ["Find the definition of this symbol", "Apply this exact rename everywhere and run the specified checks"],
+      },
+      bounded: {
+        what: "The task needs a short chain of local reasoning or a small choice among clear alternatives, but the overall path is known",
+        not_for: "Purely mechanical execution, or open-ended investigation with repeated hypothesis testing",
+        examples: ["Implement this specified validation rule in one module", "Review a small diff against explicit acceptance criteria"],
+      },
+      iterative: {
+        what: "The worker must form and revise hypotheses or implementation choices from code inspection, tests, or tool feedback",
+        not_for: "A known sequence whose checks only confirm completion",
+        examples: ["Find the cause of a flaky test and fix it", "Adapt an implementation as integration failures reveal constraints"],
+      },
+      deep: {
+        what: "The worker must reconcile interacting constraints, compare non-obvious approaches, or reason through a long dependency chain for global correctness",
+        not_for: "Work that is merely broad, expensive to get wrong, or underspecified but follows a known recipe once clarified",
+        examples: ["Diagnose an intermittent consistency failure with several plausible interacting causes", "Design a compatibility strategy under conflicting API and data constraints"],
+      },
+    },
+  ),
 };
 
 function buildState(state: TaskState): EntryType {
@@ -138,6 +169,9 @@ export async function classifyWithJev(
     hardToReverse: answers.hard_to_reverse.noul,
     solutionShape: answers.solution_shape.noul,
     executionScope: answers.execution_scope.choice,
+    reasoningDemand: answers.reasoning_demand.choice,
+    reasoningDemandConfidence: answers.reasoning_demand.confidence,
+    reasoningDemandProbabilities: answers.reasoning_demand.probabilities,
     backend: "jev",
     latencyMs,
   };

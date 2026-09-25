@@ -22,15 +22,19 @@ l'abstrait — il reconnaît une classe déjà évaluée.
         │
         ▼
   classify()  ──▶  POST api.typesafe.ai/v1/systemone   (model: jev-latest)
-        │           2 Choice : quelle classe de tâche ? (lookup, review, debug, implement,
+        │           3 Choice : quelle classe de tâche ? (lookup, review, debug, implement,
         │                      refactor, test, docs, chore, other)
         │                      quel est l'effet le plus étendu de l'exécution ? (read_only,
         │                      local_write, external_effect)
+        │                      quel schéma de raisonnement le worker doit-il suivre ? (direct,
+        │                      bounded, iterative, deep)
         │           3 Noul   : 4+ systèmes ? difficile à annuler ? mécanique en masse ou
         │                      jugement de conception ?
-        │           (les 5 questions évaluées en parallèle dans le même appel)
+        │           (les 6 questions évaluées en parallèle dans le même appel)
         ▼
-   route()    ──▶  classe → tier (light/mid/frontier), puis tier → sélecteur du roster choisi
+   route()    ──▶  classe → tier (light/mid/frontier), puis tier → sélecteur du roster choisi ;
+        │           côté codex, schéma de raisonnement → effort (selectReasoningEffort, découplé
+        │           du tier)
         ▼
 chooseModel() ──▶  côté codex seulement : résout le sélecteur en vrai id de modèle via
         │           ~/.codex/config.toml (voir src/codexModel.ts)
@@ -46,13 +50,30 @@ préfixe de version est lu dans la config Codex à l'exécution (`chooseModel()`
 
 | Tier | claude (`--model`) | codex (roster) | codex (résolu, exemple) |
 | --- | --- | --- | --- |
-| light | `haiku` | `luna` + `model_reasoning_effort=low` | `gpt-5.6-luna` |
-| mid | `sonnet` | `terra` + `model_reasoning_effort=high` | `gpt-5.6-terra` |
-| frontier | `opus` | `sol` + `model_reasoning_effort=xhigh` | `gpt-5.6-sol` |
+| light | `haiku` | `luna` | `gpt-5.6-luna` |
+| mid | `sonnet` | `terra` | `gpt-5.6-terra` |
+| frontier | `opus` | `sol` | `gpt-5.6-sol` |
 
-Les niveaux de reasoning codex suivent la recommandation de herd (Luna pour le mécanique, Terra
-pour le code ordinaire, Sol réservé aux problèmes vraiment durs). Claude Code n'a pas de flag
-équivalent, donc le tier seul y porte la décision.
+Le roster ne fixe plus l'effort de raisonnement codex par tier. `model_reasoning_effort` est une
+décision séparée (`selectReasoningEffort()`), dérivée du signal `reasoning_demand` :
+
+| `reasoning_demand` | Effort de base |
+| --- | --- |
+| `direct` | `low` |
+| `bounded` | `medium` |
+| `iterative` | `high` |
+| `deep` | `xhigh` |
+
+Deux garde-fous peuvent seulement faire monter cet effort, jamais le baisser : une confiance
+faible sur `reasoning_demand` le monte d'un cran, et une classe de tâche incertaine (le même
+plancher que `route()` vérifie pour le tier) interdit `low`, plancher à `medium`. Un même
+`reasoning_demand` donne donc le même effort qu'il tombe sur le tier light ou frontier : c'est
+volontaire, l'effort de raisonnement et le tier mesurent deux choses différentes (la forme du
+raisonnement requis, pas la capacité du modèle). `none` et `max` ne sont jamais choisis
+automatiquement — uniquement via un override explicite (`RouteOptions.effort`, valide seulement
+si le vendeur résolu est codex ; sinon `route()` lève une erreur explicite plutôt que d'ignorer
+l'override en silence). Claude Code n'a pas de flag équivalent, donc le tier seul y porte la
+décision de modèle.
 
 ## Usage
 
@@ -75,6 +96,11 @@ $ choicemymodel "Review the auth diff" --kind codex
   "reasons": []
 }
 ```
+
+`effortReason` apparaît en plus de `reasons` quand un garde-fou d'effort s'est déclenché (par
+exemple `"low confidence on reasoning demand, effort raised one step"`) : un champ séparé, pour
+qu'un code qui lit `reasons` ne puisse jamais confondre un ajustement d'effort avec une raison
+d'escalade de tier.
 
 Depuis un script shell :
 
@@ -112,8 +138,14 @@ modèle sort de son jugement.
   nom de question et par option : `answers.use_case.choice` est l'union littérale de mes propres
   classes, donc plus aucun narrowing à la main. Timeout, retries, `baseURL` et modèle par défaut
   viennent du SDK et de ses variables d'environnement.
-- **Une seule requête, cinq questions**, évaluées en parallèle : les trois Noul ne coûtent presque
-  rien de plus que les deux Choice.
+- **Une seule requête, six questions**, évaluées en parallèle : les trois Noul ne coûtent presque
+  rien de plus que les trois Choice.
+- **L'effort de raisonnement codex est découplé du tier.** `reasoning_demand` (Choice à 4 valeurs
+  ordinales) mesure la forme du raisonnement requis par la tâche, pas son enjeu ni sa portée ;
+  `selectReasoningEffort()` en tire l'effort indépendamment du tier — même `reasoning_demand`, même
+  effort, que la tâche atterrisse en light ou en frontier. Le tier répond à « quelle capacité de
+  modèle ? », l'effort à « combien d'itération sur le chemin de résolution ? » : deux questions
+  différentes, plus de mapping fixe entre les deux.
 - **Un seul signal pour mécanique-en-masse vs jugement-de-conception.** `solution_shape` remplace
   les deux anciens Noul quasi-inverses (`craft_is_main_difficulty` / `is_bulk_mechanical`) : lu sur
   `chore`/`refactor` pour la désescalade, sur toutes les classes pour l'escalade côté conception.
