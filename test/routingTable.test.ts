@@ -295,3 +295,98 @@ test("route() picks the same codex effort for the same reasoning demand regardle
   assert.equal(light.worker.effort, "high");
   assert.equal(mid.worker.effort, "high");
 });
+
+// A low solutionShape only means something on classes where "design judgment"
+// is a real axis (implement/refactor). On other classes the noul still comes
+// back near 0 or 1 (it's a probability, it has to answer something), but
+// reading it there was wrongly escalating lookups/debugs/reviews.
+test("a low solutionShape does not escalate lookup, debug or review", () => {
+  for (const useCase of ["lookup", "debug", "review"] as const) {
+    const decision = route(classification({ useCase, solutionShape: 0.1 }));
+    assert.ok(
+      !decision.reasons.includes("design judgment is the main difficulty"),
+      `${useCase} should not escalate on solutionShape`,
+    );
+  }
+});
+
+test("a low solutionShape still escalates implement and refactor", () => {
+  for (const useCase of ["implement", "refactor"] as const) {
+    const decision = route(classification({ useCase, solutionShape: 0.1 }));
+    assert.ok(
+      decision.reasons.includes("design judgment is the main difficulty"),
+      `${useCase} should escalate on solutionShape`,
+    );
+    assert.equal(decision.escalated, true);
+  }
+});
+
+test("other risk signals still escalate lookup/debug/review even though solutionShape is ignored there", () => {
+  const decision = route(classification({ useCase: "debug", solutionShape: 0.1, spansMultipleSystems: 0.9 }));
+  assert.deepEqual(decision.reasons, ["spans 4+ systems"]);
+  assert.equal(decision.escalated, true);
+});
+
+test("selectReasoningEffort floors effort at medium when a critical risk forces the frontier tier", () => {
+  const hardToReverse = selectReasoningEffort(
+    classification({ reasoningDemand: "direct", reasoningDemandConfidence: 0.95, hardToReverse: 0.9 }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(hardToReverse.effort, "medium");
+  assert.match(hardToReverse.reason ?? "", /critical risk/);
+
+  const externalEffect = selectReasoningEffort(
+    classification({
+      reasoningDemand: "direct",
+      reasoningDemandConfidence: 0.95,
+      executionScope: "external_effect",
+    }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(externalEffect.effort, "medium");
+  assert.match(externalEffect.reason ?? "", /critical risk/);
+});
+
+test("route() never pairs a frontier tier forced by critical risk with a low effort", () => {
+  const decision = route(
+    classification({
+      useCase: "implement",
+      hardToReverse: 0.9,
+      reasoningDemand: "direct",
+      reasoningDemandConfidence: 0.95,
+    }),
+    { kind: "codex" },
+  );
+  assert.equal(decision.tier, "frontier");
+  assert.equal(decision.worker.effort, "medium");
+});
+
+test("selectReasoningEffort defaults to medium when reasoningDemand is unrecognized", () => {
+  const selection = selectReasoningEffort(
+    classification({ reasoningDemand: "urgent" as Classification["reasoningDemand"], reasoningDemandConfidence: 0.95 }),
+    DEFAULT_THRESHOLDS,
+  );
+  assert.equal(selection.effort, "medium");
+  assert.match(selection.reason ?? "", /unrecognized reasoning demand/);
+});
+
+test("selectReasoningEffort never lets an unrecognized reasoningDemand reach the rendered args as undefined", () => {
+  const decision = route(
+    classification({ reasoningDemand: undefined as unknown as Classification["reasoningDemand"] }),
+    { kind: "codex" },
+  );
+  assert.equal(decision.worker.effort, "medium");
+  assert.doesNotMatch(decision.worker.args, /undefined/);
+});
+
+test("selectReasoningEffort still applies its confidence guard rail with a partial custom thresholds object", () => {
+  // A caller-supplied thresholds object that omits reasoningDemandConfidence
+  // must not silently disable the guard rail (`x < undefined` is always false).
+  const partialThresholds = { noul: 0.7, minUseCaseConfidence: 0.5 } as unknown as typeof DEFAULT_THRESHOLDS;
+  const selection = selectReasoningEffort(
+    classification({ reasoningDemand: "bounded", reasoningDemandConfidence: 0.4 }),
+    partialThresholds,
+  );
+  assert.equal(selection.effort, "high");
+  assert.match(selection.reason ?? "", /low confidence on reasoning demand/);
+});

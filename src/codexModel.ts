@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse, type TomlTable } from "smol-toml";
 import type { Tier } from "./types.js";
 
 /** Injectable so tests can stub the file read without touching the real filesystem. */
@@ -22,26 +23,19 @@ async function readConfigFile(configPath: string): Promise<string> {
 }
 
 /**
- * Extracts the top-level `model` key from a Codex config.toml, ignoring keys
- * inside any table ([profiles.*] or otherwise) since those are per-profile
- * overrides, not the CLI's default.
+ * Codex picks its active profile's model over the top-level one when
+ * `profile` is set, so a resolver reading the same file has to respect the
+ * same precedence — otherwise it would report a model Codex itself never
+ * actually uses.
  */
-function extractTopLevelModel(toml: string): string | undefined {
-  let inTopLevel = true;
-  let model: string | undefined;
+function extractModel(config: TomlTable): string | undefined {
+  const activeProfileName = typeof config.profile === "string" ? config.profile : undefined;
+  const profiles = config.profiles as TomlTable | undefined;
+  const activeProfile = activeProfileName ? (profiles?.[activeProfileName] as TomlTable | undefined) : undefined;
+  const profileModel = activeProfile?.model;
 
-  for (const rawLine of toml.split("\n")) {
-    const line = rawLine.trim();
-    if (line.startsWith("[")) {
-      inTopLevel = false;
-      continue;
-    }
-    if (!inTopLevel || line.startsWith("#")) continue;
-    const match = line.match(/^model\s*=\s*"([^"]+)"/);
-    if (match) model = match[1];
-  }
-
-  return model;
+  if (typeof profileModel === "string") return profileModel;
+  return typeof config.model === "string" ? config.model : undefined;
 }
 
 /**
@@ -50,8 +44,9 @@ function extractTopLevelModel(toml: string): string | undefined {
  * id that will drift out of sync with what Codex actually resolves.
  *
  * Fails loudly (not a silent fallback) when the config is missing, unreadable,
- * or the model value doesn't match the expected shape: a stale hardcoded id
- * that silently keeps working is worse than a routing call that errors out.
+ * invalid TOML, or the model value doesn't match the expected shape: a stale
+ * hardcoded id that silently keeps working is worse than a routing call that
+ * errors out.
  */
 export async function resolveCodexModel(
   tier: Tier,
@@ -69,11 +64,20 @@ export async function resolveCodexModel(
     );
   }
 
-  const model = extractTopLevelModel(contents);
+  let config: TomlTable;
+  try {
+    config = parse(contents);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not parse the Codex config at ${configPath} as TOML (${detail}). Check its syntax.`);
+  }
+
+  const model = extractModel(config);
   if (model === undefined) {
     throw new Error(
-      `No top-level "model" key found in ${configPath}. ` +
-        'Set model = "gpt-<version>" outside any [profiles.*] table.',
+      `No "model" key found in ${configPath} (checked the active profile's table first, then the ` +
+        'top level). Set model = "gpt-<version>", either at the top level or inside the table for ' +
+        "the profile named by the top-level \"profile\" key.",
     );
   }
 

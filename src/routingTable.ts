@@ -147,21 +147,42 @@ export interface EffortSelection {
  * from the tier, so the same reasoningDemand always yields the same effort
  * regardless of which tier the task landed on.
  *
- * Two guard rails can raise (never lower) the base mapping:
+ * Guard rails can only raise the base mapping, never lower it:
+ * - an unrecognized reasoningDemand (a defensive check: Jev is expected to
+ *   only ever answer one of the four known values) defaults to "medium"
+ *   rather than letting `undefined` reach the rendered args;
  * - low confidence on reasoningDemand itself bumps the effort up one step;
  * - a use case the classifier is unsure about (the same floor route() checks)
  *   never gets "low" effort, since a wrong class guess makes "direct" an
- *   unreliable read. This floor is re-derived here rather than passed in, so
- *   this function keeps its two-argument, independently testable signature.
+ *   unreliable read;
+ * - a critical risk that forces route() straight to the frontier tier
+ *   (hard_to_reverse, or an external_effect scope — mirrors route()'s own
+ *   criticalRisk check) never gets "low" effort either: a task serious enough
+ *   to demand the best model shouldn't also get the laziest effort setting.
+ *
+ * The use-case and critical-risk floors are re-derived here rather than
+ * passed in, so this function keeps its two-argument, independently testable
+ * signature.
  */
 export function selectReasoningEffort(
   classification: Classification,
   thresholds: RoutingThresholds,
 ): EffortSelection {
-  let effort = REASONING_EFFORT_BASE[classification.reasoningDemand];
-  let reason: string | undefined;
+  // reasoningDemand comes from an external classifier; index as a Partial map
+  // so an unexpected value degrades to a safe default instead of `undefined`.
+  const baseEffort = (REASONING_EFFORT_BASE as Partial<Record<string, ReasoningEffort>>)[
+    classification.reasoningDemand
+  ];
+  let effort: ReasoningEffort = baseEffort ?? "medium";
+  let reason: string | undefined =
+    baseEffort === undefined ? "unrecognized reasoning demand, effort defaulted to medium" : undefined;
 
-  if (classification.reasoningDemandConfidence < thresholds.reasoningDemandConfidence) {
+  // Falls back to the shipped default when a caller passes a partial custom
+  // RoutingThresholds that omits this field: `x < undefined` is always false
+  // in JS, which would otherwise silently disable this guard rail.
+  const reasoningConfidenceFloor =
+    thresholds.reasoningDemandConfidence ?? DEFAULT_THRESHOLDS.reasoningDemandConfidence;
+  if (classification.reasoningDemandConfidence < reasoningConfidenceFloor) {
     effort = bumpEffort(effort);
     reason = "low confidence on reasoning demand, effort raised one step";
   }
@@ -171,6 +192,13 @@ export function selectReasoningEffort(
   if (classification.useCaseConfidence < confidenceFloor && effort === "low") {
     effort = "medium";
     reason = "classifier unsure which task class this is, effort floored at medium";
+  }
+
+  const criticalRisk =
+    classification.hardToReverse >= thresholds.noul || classification.executionScope === "external_effect";
+  if (criticalRisk && effort === "low") {
+    effort = "medium";
+    reason = "critical risk forces the frontier tier, effort floored at medium";
   }
 
   return { effort, reason };
@@ -253,7 +281,16 @@ export function route(classification: Classification, options: RouteOptions = {}
   if (isYes(classification.hardToReverse)) reasons.push("hard to reverse if wrong");
   if (executionScope === "external_effect") reasons.push("has an effect outside the working copy");
   if (isYes(classification.spansMultipleSystems)) reasons.push("spans 4+ systems");
-  if (isNo(classification.solutionShape)) reasons.push("design judgment is the main difficulty");
+  // solutionShape reads as a real craft-vs-mechanical spectrum only on classes
+  // where "design judgment" is a meaningful axis. On lookup/debug/review/docs
+  // etc. the noul still returns a near-0/1 answer (it has to answer
+  // something), but that answer doesn't mean anything for those classes, so
+  // reading it there was escalating lookups and debugs on a signal that
+  // wasn't measuring what its name claims.
+  const designJudgmentApplies = useCase === "implement" || useCase === "refactor";
+  if (designJudgmentApplies && isNo(classification.solutionShape)) {
+    reasons.push("design judgment is the main difficulty");
+  }
 
   const confidenceFloor =
     thresholds.useCaseConfidenceFloors?.[useCase] ?? thresholds.minUseCaseConfidence;

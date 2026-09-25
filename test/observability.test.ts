@@ -56,6 +56,28 @@ test("logDecision writes one complete JSONL record without delaying the caller",
   });
 });
 
+test("logDecision includes effortReason and vendorFallbackReason when set", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "choicemymodel-log-"));
+  const filePath = join(dir, "decisions.jsonl");
+  const decision: RoutingDecision = {
+    ...fakeDecision(),
+    effortReason: "low confidence on reasoning demand, effort raised one step",
+    vendorFallbackReason: "codex config unavailable, fell back to claude",
+  };
+
+  logDecision({ text: "Add CSV export" }, "claude", decision, {
+    filePath,
+    id: () => "decision-456",
+    now: () => new Date("2026-09-20T12:00:00.000Z"),
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const [line] = (await readFile(filePath, "utf8")).trim().split("\n");
+  const parsed = JSON.parse(line);
+  assert.equal(parsed.decision.effortReason, "low confidence on reasoning demand, effort raised one step");
+  assert.equal(parsed.decision.vendorFallbackReason, "codex config unavailable, fell back to claude");
+});
+
 test("logDecision swallows an asynchronous write failure", async () => {
   const errors: string[] = [];
 
@@ -107,4 +129,51 @@ test("chooseModel resolves the real codex model id before returning", async () =
   assert.equal(decision.worker.kind, "codex");
   assert.equal(decision.worker.model, "gpt-9.9-terra");
   assert.match(decision.worker.args, /^-m gpt-9\.9-terra /);
+});
+
+test("chooseModel falls back to claude when codex resolution fails for an auto-picked vendor", async () => {
+  let logged: RoutingDecision | undefined;
+  const decision = await chooseModel(
+    { text: "Rename fetchUser across the repo" },
+    {}, // no explicit kind: "chore" defaults to codex in DEFAULT_VENDOR_TABLE
+    {
+      classify: async () => ({ ...fakeDecision().classification, useCase: "chore", solutionShape: 0.5 }),
+      log: (_state, _kind, d) => {
+        logged = d;
+      },
+      resolveCodexModel: async () => {
+        throw new Error("ENOENT: no such file or directory");
+      },
+    },
+  );
+
+  assert.equal(decision.worker.kind, "claude");
+  assert.equal(decision.vendorFallbackReason, "codex config unavailable, fell back to claude");
+  assert.equal(decision.effortReason, undefined);
+  assert.equal(logged?.worker.kind, "claude");
+  assert.equal(logged?.vendorFallbackReason, "codex config unavailable, fell back to claude");
+});
+
+test("chooseModel still throws when codex is requested explicitly and resolution fails, after logging the attempt", async () => {
+  let logged: RoutingDecision | undefined;
+
+  await assert.rejects(
+    chooseModel(
+      { text: "Bump every dependency" },
+      { kind: "codex" },
+      {
+        classify: async () => fakeDecision().classification,
+        log: (_state, _kind, d) => {
+          logged = d;
+        },
+        resolveCodexModel: async () => {
+          throw new Error("ENOENT: config missing");
+        },
+      },
+    ),
+    /ENOENT: config missing/,
+  );
+
+  assert.equal(logged?.worker.kind, "codex");
+  assert.equal(logged?.vendorFallbackReason, "codex config unavailable, model resolution failed");
 });

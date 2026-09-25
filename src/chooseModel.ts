@@ -1,7 +1,7 @@
 import { classifyWithJev } from "./classifiers/jev.js";
 import { type CodexConfigReader, resolveCodexModel } from "./codexModel.js";
 import { logDecision } from "./observability/log.js";
-import { type RouteOptions, route } from "./routingTable.js";
+import { renderWorker, type RouteOptions, route } from "./routingTable.js";
 import type { Classification, RoutingDecision, TaskState } from "./types.js";
 
 export type ChooseModelOptions = RouteOptions;
@@ -18,6 +18,9 @@ export interface ChooseModelDependencies {
   codexConfigPath?: string;
   codexConfigReader?: CodexConfigReader;
 }
+
+const CODEX_UNAVAILABLE_FALLBACK_REASON = "codex config unavailable, fell back to claude";
+const CODEX_UNAVAILABLE_EXPLICIT_REASON = "codex config unavailable, model resolution failed";
 
 /**
  * Public entry point: classify the task, then pick the worker. This is what
@@ -41,12 +44,32 @@ export async function chooseModel(
       dependencies.resolveCodexModel ??
       ((tier: RoutingDecision["tier"]) =>
         resolveCodexModel(tier, dependencies.codexConfigPath, dependencies.codexConfigReader));
-    const model = await resolve(decision.tier);
-    decision.worker = {
-      ...decision.worker,
-      model,
-      args: decision.worker.args.replace(/^-m \S+/, `-m ${model}`),
-    };
+
+    try {
+      const model = await resolve(decision.tier);
+      decision.worker = renderWorker("codex", decision.tier, classification.executionScope, decision.worker.effort, model);
+    } catch (err) {
+      if (options.kind === "codex") {
+        // The caller pinned codex explicitly, so failing loudly is still the
+        // right call — but the attempt is worth keeping in the decision log
+        // before it's lost to the thrown error.
+        decision.vendorFallbackReason = CODEX_UNAVAILABLE_EXPLICIT_REASON;
+        try {
+          (dependencies.log ?? logDecision)(state, options.kind, decision);
+        } catch (logErr) {
+          console.error("Could not record routing decision:", logErr);
+        }
+        throw err;
+      }
+
+      // The vendor was auto-picked (no explicit --kind codex): codex isn't
+      // usable on this machine right now, so fall back to claude rather than
+      // fail a routing call the caller never asked to pin to codex.
+      decision.worker = renderWorker("claude", decision.tier, classification.executionScope);
+      decision.vendorFallbackReason = CODEX_UNAVAILABLE_FALLBACK_REASON;
+      // The codex reasoning effort route() picked no longer applies to a claude worker.
+      decision.effortReason = undefined;
+    }
   }
 
   try {

@@ -108,6 +108,13 @@ export interface RoutingDecision {
    * mistaken for a tier-escalation reason by code that reads that array.
    */
   effortReason?: string;
+  /**
+   * Set by chooseModel() when an auto-picked codex vendor had to fall back to
+   * claude because the Codex model couldn't be resolved (config missing or
+   * invalid). Kept separate from `reasons`/`effortReason` for the same
+   * reason: a different kind of adjustment, not a tier or effort decision.
+   */
+  vendorFallbackReason?: string;
 }
 
 export type RoutingTable = Record<UseCase, Tier>;
