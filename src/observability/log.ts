@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+import { resolvePackagePath } from "../packageRoot.js";
 import type { AgentKind, Classification, RoutingDecision, TaskState, WorkerChoice } from "../types.js";
 
 export interface LoggedDecision {
@@ -32,20 +32,10 @@ export interface DecisionLogOptions {
   error?: (message: string) => void;
 }
 
-/**
- * The published `bin` entry (dist/cli.js) is invoked as a global binary from
- * arbitrary cwds (e.g. by herd-spawn), so the log must live next to the
- * package itself rather than under process.cwd() — otherwise every herd
- * worker writes its own orphaned data/decisions.jsonl in its own project
- * directory instead of the one the dashboard reads from.
- */
-function packageRoot(): string {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(moduleDir, "..", "..");
-}
-
+// The published bin entry runs from arbitrary cwds (e.g. herd-spawn), so the log
+// must live next to the package rather than under process.cwd().
 function defaultPath(): string {
-  return resolve(packageRoot(), "data/decisions.jsonl");
+  return resolvePackagePath("data/decisions.jsonl");
 }
 
 async function appendToFile(filePath: string, line: string): Promise<void> {
