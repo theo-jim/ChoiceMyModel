@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chooseModel } from "./chooseModel.js";
 import { resolvePackagePath } from "./packageRoot.js";
@@ -93,7 +94,50 @@ export function formatDecision(decision: RoutingDecision, shell: boolean): strin
   return JSON.stringify(decision, null, 2);
 }
 
+function newestMtimeMs(dir: string, extension: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { recursive: true })) {
+    if (typeof entry !== "string" || extname(entry) !== extension) continue;
+    const mtime = statSync(resolve(dir, entry)).mtimeMs;
+    if (mtime > newest) newest = mtime;
+  }
+  return newest;
+}
+
+/**
+ * dist/ is gitignored and the global `choicemymodel` bin symlinks straight
+ * into it, so a routing change landed in src/ but never rebuilt leaves
+ * `git status` clean while the binary keeps routing on stale, hardcoded
+ * output (this bit us: a model-id refactor sat in src/ while dist/ kept
+ * routing frontier tasks to a pinned "claude-opus-5" for weeks). Fail loud
+ * instead of silently running outdated routing logic.
+ *
+ * srcDir/distFile are parameterized for testability; real callers rely on
+ * the defaults.
+ */
+export function checkBuildFreshness(
+  srcDir: string = resolvePackagePath("src"),
+  distFile: string = fileURLToPath(import.meta.url),
+): string | undefined {
+  if (!existsSync(srcDir)) return undefined; // published without src/ alongside dist/: not this dev layout
+
+  const newestSrcMtime = newestMtimeMs(srcDir, ".ts");
+  const distMtime = statSync(distFile).mtimeMs;
+  if (newestSrcMtime <= distMtime) return undefined;
+
+  return (
+    "choicemymodel: dist/ is stale — src/ changed after the last build.\n" +
+    "Run `npm run build` in the package directory, then retry."
+  );
+}
+
 async function main(): Promise<void> {
+  const staleWarning = checkBuildFreshness();
+  if (staleWarning !== undefined) {
+    console.error(staleWarning);
+    process.exit(3);
+  }
+
   loadPackageEnvFile();
 
   let args: CliArgs;
