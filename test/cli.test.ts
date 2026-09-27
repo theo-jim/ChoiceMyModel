@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { UsageError, formatDecision, parseArgs, shellQuote } from "../src/cli.js";
+import {
+  UsageError,
+  checkBuildFreshness,
+  formatDecision,
+  parseArgs,
+  shellQuote,
+} from "../src/cli.js";
 import type { RoutingDecision } from "../src/types.js";
 
 const NO_ENV = {} as NodeJS.ProcessEnv;
@@ -81,4 +90,55 @@ test("formatDecision renders eval-able shell assignments with --shell", () => {
 test("formatDecision renders JSON without --shell", () => {
   const out = formatDecision(decision(), false);
   assert.equal(JSON.parse(out).tier, "mid");
+});
+
+function withFreshnessFixture(
+  run: (srcDir: string, distFile: string, touchSrc: () => void) => void,
+): void {
+  const root = mkdtempSync(join(tmpdir(), "choicemymodel-freshness-"));
+  try {
+    const srcDir = join(root, "src");
+    const distFile = join(root, "cli.js");
+    mkdirSync(srcDir);
+    const srcFile = join(srcDir, "routingTable.ts");
+    writeFileSync(srcFile, "export {};");
+    writeFileSync(distFile, "export {};");
+
+    const base = new Date("2026-01-01T00:00:00Z");
+    utimesSync(srcFile, base, base);
+    utimesSync(distFile, base, base);
+
+    run(srcDir, distFile, () => {
+      const later = new Date(base.getTime() + 60_000);
+      utimesSync(srcFile, later, later);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("checkBuildFreshness passes when dist is at least as new as src", () => {
+  withFreshnessFixture((srcDir, distFile) => {
+    assert.equal(checkBuildFreshness(srcDir, distFile), undefined);
+  });
+});
+
+test("checkBuildFreshness fails loud when src changed after the last build", () => {
+  withFreshnessFixture((srcDir, distFile, touchSrc) => {
+    touchSrc();
+    const warning = checkBuildFreshness(srcDir, distFile);
+    assert.match(warning ?? "", /dist\/ is stale/);
+    assert.match(warning ?? "", /npm run build/);
+  });
+});
+
+test("checkBuildFreshness skips when there is no src/ next to dist (published layout)", () => {
+  const root = mkdtempSync(join(tmpdir(), "choicemymodel-freshness-"));
+  try {
+    const distFile = join(root, "cli.js");
+    writeFileSync(distFile, "export {};");
+    assert.equal(checkBuildFreshness(join(root, "src"), distFile), undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

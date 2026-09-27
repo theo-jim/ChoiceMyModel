@@ -1,0 +1,9 @@
+#!/bin/sh
+# Keeps dist/ in sync with src/ on every commit. The global `choicemymodel`
+# bin symlinks straight into dist/, and dist/ is gitignored, so a stale build
+# used to go unnoticed by `git status` (see checkBuildFreshness in src/cli.ts,
+# added after that exact incident). Rebuilding here means the working tree's
+# dist/ is never behind what was just committed, and a build failure blocks
+# the commit instead of landing silently.
+set -e
+npm run build --silent
